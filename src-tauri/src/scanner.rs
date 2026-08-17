@@ -29,10 +29,17 @@ pub(crate) struct RepositoryGraph {
     root: String,
     name: String,
     branch: Option<String>,
+    source: RepositorySource,
     nodes: Vec<RepositoryNode>,
     edges: Vec<RepositoryEdge>,
     stats: RepositoryStats,
     warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum RepositorySource {
+    Local,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -81,6 +88,7 @@ pub(crate) struct RepositoryStats {
     files: usize,
     directories: usize,
     lines: u64,
+    line_count_available: bool,
     bytes: u64,
     languages: Vec<LanguageStat>,
     truncated: bool,
@@ -304,12 +312,14 @@ impl ScanState {
             root: root.to_string_lossy().into_owned(),
             name: self.nodes[0].name.clone(),
             branch: git_branch(root),
+            source: RepositorySource::Local,
             nodes: self.nodes,
             edges: self.edges,
             stats: RepositoryStats {
                 files: self.files,
                 directories: self.directories,
                 lines: self.lines,
+                line_count_available: true,
                 bytes: self.bytes,
                 languages,
                 truncated: self.truncated,
@@ -546,6 +556,7 @@ mod tests {
                 files: 5,
                 directories: 1,
                 lines: 5,
+                line_count_available: true,
                 bytes: 52,
                 languages: vec![
                     LanguageStat {

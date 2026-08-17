@@ -45,12 +45,13 @@ function spiralCell(index: number): [number, number] {
   return [x, z];
 }
 
-function dimensions(node: RepositoryNode) {
+function dimensions(node: RepositoryNode, lineCountAvailable: boolean) {
+  const magnitude = lineCountAvailable ? node.lines : Math.ceil(node.sizeBytes / 64);
   if (node.kind === "repository") {
     return {
       width: 4.2,
       depth: 4.2,
-      height: Math.min(4, 1.6 + Math.log10(node.lines + 1) * 0.55),
+      height: Math.min(4, 1.6 + Math.log10(magnitude + 1) * 0.55),
     };
   }
 
@@ -66,7 +67,7 @@ function dimensions(node: RepositoryNode) {
   return {
     width: node.kind === "source" ? 1.15 : 1.35,
     depth: node.kind === "source" ? 1.15 : 1.35,
-    height: Math.min(3, 0.28 + Math.log10(node.lines + 1) * 0.58),
+    height: Math.min(3, 0.28 + Math.log10(magnitude + 1) * 0.58),
   };
 }
 
@@ -86,7 +87,7 @@ export function buildRepositoryLayout(graph: RepositoryGraph): RepositoryLayout 
       node,
       x: cellX * 4.8,
       z: cellZ * 4.8,
-      ...dimensions(node),
+      ...dimensions(node, graph.stats.lineCountAvailable),
     };
   });
   const renderedIds = new Set(modules.map(({ node }) => node.id));

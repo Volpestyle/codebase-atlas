@@ -29,6 +29,7 @@ export interface RepositoryStats {
   files: number;
   directories: number;
   lines: number;
+  lineCountAvailable: boolean;
   bytes: number;
   languages: { name: string; files: number; lines: number }[];
   truncated: boolean;
@@ -38,6 +39,7 @@ export interface RepositoryGraph {
   root: string;
   name: string;
   branch: string | null;
+  source: "local" | "github";
   nodes: RepositoryNode[];
   edges: RepositoryEdge[];
   stats: RepositoryStats;

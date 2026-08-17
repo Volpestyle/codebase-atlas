@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "test:github": "node --experimental-strip-types --test tests/github-url.test.ts",
     "preview": "vite preview",
     "tauri": "tauri"
   },

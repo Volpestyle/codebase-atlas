@@ -82,6 +82,117 @@ button:disabled {
   transform: translateY(0);
 }
 
+.source-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-width: none;
+  padding: 0;
+  border: 1px solid var(--ink);
+  border-radius: 0;
+  background: var(--paper-light);
+  color: var(--ink);
+  box-shadow: none;
+}
+
+.source-dialog::backdrop {
+  background: rgba(20, 21, 15, 0.52);
+}
+
+.source-dialog form > header,
+.source-dialog form > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.source-dialog form > header {
+  min-height: 64px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--ink);
+}
+
+.source-dialog h2 {
+  margin: 4px 0 0;
+  font-size: 14px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.source-dialog header button {
+  padding: 4px 7px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 20px;
+}
+
+.source-dialog form > p {
+  margin: 0;
+  padding: 18px 14px;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--olive);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.source-dialog form > label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 16px 14px 20px;
+}
+
+.source-dialog label span {
+  color: var(--olive);
+  font-size: 8px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.source-dialog input {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 11px;
+  border: 1px solid var(--ink);
+  border-radius: 0;
+  background: var(--paper);
+  font-size: 11px;
+}
+
+.source-dialog form > .source-dialog-error {
+  margin: -8px 14px 16px;
+  padding: 10px;
+  border: 1px solid var(--rust);
+  color: var(--rust);
+  background: rgba(113, 54, 24, 0.05);
+  font-family: inherit;
+  font-size: 9px;
+}
+
+.source-dialog form > footer {
+  min-height: 58px;
+  padding-left: 14px;
+  border-top: 1px solid var(--ink);
+}
+
+.source-dialog footer small {
+  color: var(--olive);
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.source-dialog footer button {
+  align-self: stretch;
+  padding: 0 18px;
+  border-left: 1px solid var(--ink);
+  background: var(--ink);
+  color: var(--paper-light);
+  cursor: pointer;
+  font-size: 9px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
 .app-shell {
   display: grid;
   grid-template-rows: 62px minmax(0, 1fr) 28px;
@@ -164,7 +275,13 @@ button:disabled {
   white-space: nowrap;
 }
 
+.source-actions {
+  display: flex;
+  flex: 0 0 auto;
+}
+
 .scan-button,
+.github-button,
 .mobile-rail-button {
   flex: 0 0 auto;
   padding: 0 18px;
@@ -177,9 +294,25 @@ button:disabled {
   text-transform: uppercase;
 }
 
-.scan-button span {
+.scan-button span,
+.github-button span {
   margin-right: 8px;
   color: var(--paper-dark);
+}
+
+.scan-button b,
+.github-button b {
+  font-weight: 500;
+}
+
+.github-button {
+  border-left-color: var(--line);
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.github-button span {
+  color: var(--olive);
 }
 
 .mobile-rail-button {
@@ -632,6 +765,16 @@ kbd {
   font-size: 9px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.empty-actions {
+  display: inline-flex;
+}
+
+.empty-actions button + button {
+  border-left: 0;
+  background: var(--paper);
+  color: var(--ink);
 }
 
 .empty-state small {
@@ -1195,20 +1338,30 @@ kbd {
     font-size: 9px;
   }
 
-  .scan-button {
+  .source-actions button {
     width: 54px;
     padding: 0;
     overflow: hidden;
-    color: transparent;
   }
 
-  .scan-button span {
+  .source-actions b {
+    display: none;
+  }
+
+  .source-actions span {
     display: grid;
     width: 54px;
     height: 100%;
     place-items: center;
     margin: 0;
+  }
+
+  .scan-button span {
     color: var(--paper-light);
+  }
+
+  .github-button span {
+    color: var(--ink);
   }
 
   .workspace {
@@ -1299,6 +1452,22 @@ kbd {
 
   .empty-state p {
     font-size: 13px;
+  }
+
+  .source-dialog form > footer {
+    align-items: stretch;
+    flex-direction: column;
+    padding: 10px 0 0;
+  }
+
+  .source-dialog footer small {
+    padding: 0 12px;
+  }
+
+  .source-dialog footer button {
+    min-height: 42px;
+    border-top: 1px solid var(--ink);
+    border-left: 0;
   }
 
   .empty-diagram {
