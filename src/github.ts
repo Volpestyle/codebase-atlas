@@ -10,6 +10,7 @@ const API_VERSION = "2026-03-10";
 const MAX_NODES = 4_000;
 const generatedDirectories = new Set([
   ".git",
+  ".codebase-index",
   "node_modules",
   "target",
   "dist",
@@ -225,6 +226,7 @@ export function githubTreeToGraph(
     lines: 0,
     depth: 0,
     childCount: 0,
+    description: null,
   };
   const nodes = [root];
   const nodeById = new Map<string, RepositoryNode>([[root.id, root]]);
@@ -265,6 +267,7 @@ export function githubTreeToGraph(
       lines: 0,
       depth: entry.path.split("/").length,
       childCount: 0,
+      description: null,
     };
 
     nodes.push(node);
@@ -305,6 +308,7 @@ export function githubTreeToGraph(
       directories,
       lines: 0,
       lineCountAvailable: false,
+      importsAvailable: false,
       bytes,
       languages: [...languages]
         .map(([name, languageFiles]) => ({ name, files: languageFiles, lines: 0 }))

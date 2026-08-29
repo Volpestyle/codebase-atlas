@@ -42,6 +42,7 @@ test("builds a bounded metadata graph without generated directories", () => {
   assert.equal(graph.stats.directories, 1);
   assert.equal(graph.stats.bytes, 160);
   assert.equal(graph.stats.lineCountAvailable, false);
+  assert.equal(graph.stats.importsAvailable, false);
   assert.equal(graph.nodes[0].sizeBytes, 160);
   assert.deepEqual(
     graph.nodes.map((node) => node.id),

@@ -1,6 +1,7 @@
+mod imports;
 mod scanner;
 
-use scanner::scan_repository;
+use scanner::{save_map, scan_repository};
 
 /// Starts the Codebase Atlas desktop application.
 ///
@@ -11,7 +12,7 @@ use scanner::scan_repository;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![scan_repository])
+        .invoke_handler(tauri::generate_handler![save_map, scan_repository])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

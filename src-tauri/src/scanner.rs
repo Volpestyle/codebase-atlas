@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fs, io,
     path::{Path, PathBuf},
 };
@@ -7,10 +7,14 @@ use std::{
 use ignore::{DirEntry, WalkBuilder};
 use serde::Serialize;
 
+use crate::imports::{self, ImportLanguage, ImportResolver};
+
 const MAX_NODES: usize = 4_000;
+const MAX_IMPORT_EDGES: usize = 20_000;
 const MAX_TEXT_BYTES: u64 = 2 * 1024 * 1024;
 const GENERATED_DIRECTORIES: &[&str] = &[
     ".git",
+    ".codebase-index",
     "node_modules",
     "target",
     "dist",
@@ -55,6 +59,7 @@ pub(crate) struct RepositoryNode {
     lines: u64,
     depth: usize,
     child_count: usize,
+    description: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -76,10 +81,11 @@ pub(crate) struct RepositoryEdge {
     kind: EdgeKind,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum EdgeKind {
     Contains,
+    Imports,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -89,6 +95,7 @@ pub(crate) struct RepositoryStats {
     directories: usize,
     lines: u64,
     line_count_available: bool,
+    imports_available: bool,
     bytes: u64,
     languages: Vec<LanguageStat>,
     truncated: bool,
@@ -108,12 +115,21 @@ struct ScanState {
     relationships: Vec<(usize, usize)>,
     node_indexes: HashMap<String, usize>,
     language_totals: BTreeMap<&'static str, (usize, u64)>,
+    pending_imports: Vec<(String, ImportLanguage, Vec<String>)>,
+    npm_packages: BTreeMap<String, String>,
+    cargo_crates: BTreeMap<String, String>,
     warnings: Vec<String>,
     files: usize,
     directories: usize,
     lines: u64,
     bytes: u64,
     truncated: bool,
+}
+
+/// Writes an exported map file chosen through the save dialog.
+#[tauri::command]
+pub(crate) fn save_map(path: String, contents: String) -> Result<(), String> {
+    fs::write(path, contents).map_err(|error| format!("Could not save the map file: {error}"))
 }
 
 #[tauri::command]
@@ -123,7 +139,7 @@ pub(crate) async fn scan_repository(path: String) -> Result<RepositoryGraph, Str
         .map_err(|_| "Repository scan stopped unexpectedly.".to_owned())?
 }
 
-fn scan_repository_path(path: &Path) -> Result<RepositoryGraph, String> {
+pub(crate) fn scan_repository_path(path: &Path) -> Result<RepositoryGraph, String> {
     let root = canonical_root(path)?;
     let root_name = root.file_name().map_or_else(
         || root.to_string_lossy().into_owned(),
@@ -174,11 +190,15 @@ impl ScanState {
                 lines: 0,
                 depth: 0,
                 child_count: 0,
+                description: None,
             }],
             edges: Vec::new(),
             relationships: Vec::new(),
             node_indexes: HashMap::from([(".".to_owned(), 0)]),
             language_totals: BTreeMap::new(),
+            pending_imports: Vec::new(),
+            npm_packages: BTreeMap::new(),
+            cargo_crates: BTreeMap::new(),
             warnings: Vec::new(),
             files: 0,
             directories: 0,
@@ -226,27 +246,33 @@ impl ScanState {
         } else {
             classify(entry.path())
         };
-        let (size_bytes, lines) = if file_type.is_file() {
+        let (size_bytes, lines, text) = if file_type.is_file() {
             file_metrics(entry.path(), &id, count_text_lines, &mut self.warnings)
         } else {
-            (0, 0)
+            (0, 0, None)
         };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let extension = entry
+            .path()
+            .extension()
+            .map(|extension| extension.to_string_lossy().to_ascii_lowercase());
+        if let Some(text) = &text {
+            self.register_file_text(&id, &parent_id, &name, extension.as_deref(), text);
+        }
 
         self.nodes[parent_index].child_count += 1;
         self.nodes.push(RepositoryNode {
             id: id.clone(),
-            name: entry.file_name().to_string_lossy().into_owned(),
+            name,
             path: id.clone(),
             kind,
-            extension: entry
-                .path()
-                .extension()
-                .map(|extension| extension.to_string_lossy().to_ascii_lowercase()),
+            extension,
             language: language.map(str::to_owned),
             size_bytes,
             lines,
             depth: entry.depth(),
             child_count: 0,
+            description: None,
         });
         self.edges.push(RepositoryEdge {
             source: parent_id,
@@ -271,6 +297,72 @@ impl ScanState {
         true
     }
 
+    fn register_file_text(
+        &mut self,
+        id: &str,
+        parent_id: &str,
+        name: &str,
+        extension: Option<&str>,
+        text: &str,
+    ) {
+        if let Some(language) = imports::import_language(extension) {
+            let specifiers = imports::extract_specifiers(language, text);
+            if !specifiers.is_empty() {
+                self.pending_imports.push((id.to_owned(), language, specifiers));
+            }
+            return;
+        }
+        let directory = if parent_id == "." {
+            String::new()
+        } else {
+            parent_id.to_owned()
+        };
+        if name == "package.json" {
+            if let Some(package) = imports::npm_package_name(text) {
+                self.npm_packages.insert(package, directory);
+            }
+        } else if name == "Cargo.toml" {
+            if let Some(package) = imports::cargo_package_name(text) {
+                self.cargo_crates.insert(package.replace('-', "_"), directory);
+            }
+        }
+    }
+
+    fn resolve_imports(&mut self) -> Vec<RepositoryEdge> {
+        let node_kinds: BTreeMap<String, bool> = self
+            .nodes
+            .iter()
+            .map(|node| {
+                (
+                    node.id.clone(),
+                    matches!(node.kind, NodeKind::Directory | NodeKind::Repository),
+                )
+            })
+            .collect();
+        let resolver = ImportResolver::new(&node_kinds, &self.npm_packages, &self.cargo_crates);
+        let mut pairs = BTreeSet::new();
+        for (source, language, specifiers) in &self.pending_imports {
+            for specifier in specifiers {
+                if let Some(target) = resolver.resolve(*language, source, specifier) {
+                    pairs.insert((source.clone(), target));
+                }
+            }
+        }
+        if pairs.len() > MAX_IMPORT_EDGES {
+            self.warnings
+                .push(format!("Import edges limited to {MAX_IMPORT_EDGES}."));
+        }
+        pairs
+            .into_iter()
+            .take(MAX_IMPORT_EDGES)
+            .map(|(source, target)| RepositoryEdge {
+                source,
+                target,
+                kind: EdgeKind::Imports,
+            })
+            .collect()
+    }
+
     fn finish(mut self, root: &Path) -> RepositoryGraph {
         for &(parent, child) in self.relationships.iter().rev() {
             let child_bytes = self.nodes[child].size_bytes;
@@ -280,11 +372,15 @@ impl ScanState {
             self.nodes[parent].lines = self.nodes[parent].lines.saturating_add(child_lines);
         }
 
+        let import_edges = self.resolve_imports();
+        self.edges.extend(import_edges);
+        attach_index_summaries(root, &mut self.nodes, &mut self.warnings);
         self.nodes.sort_by(|left, right| left.id.cmp(&right.id));
         self.edges.sort_by(|left, right| {
             left.source
                 .cmp(&right.source)
                 .then_with(|| left.target.cmp(&right.target))
+                .then_with(|| left.kind.cmp(&right.kind))
         });
         if self.truncated {
             self.warnings
@@ -320,6 +416,7 @@ impl ScanState {
                 directories: self.directories,
                 lines: self.lines,
                 line_count_available: true,
+                imports_available: true,
                 bytes: self.bytes,
                 languages,
                 truncated: self.truncated,
@@ -366,32 +463,33 @@ fn file_metrics(
     id: &str,
     count_text_lines: bool,
     warnings: &mut Vec<String>,
-) -> (u64, u64) {
+) -> (u64, u64, Option<String>) {
     let Ok(metadata) = fs::metadata(path) else {
         warnings.push(format!("Could not inspect {id}."));
-        return (0, 0);
+        return (0, 0, None);
     };
     let size = metadata.len();
     if !count_text_lines || size > MAX_TEXT_BYTES {
-        return (size, 0);
+        return (size, 0, None);
     }
 
-    let Ok(lines) = count_lines(path) else {
+    let Ok(text) = read_text(path) else {
         warnings.push(format!("Could not read {id}."));
-        return (size, 0);
+        return (size, 0, None);
     };
-    (size, lines)
+    let lines = text.as_deref().map_or(0, |text| {
+        text.lines().fold(0_u64, |lines, _| lines.saturating_add(1))
+    });
+    (size, lines, text)
 }
 
-fn count_lines(path: &Path) -> io::Result<u64> {
+/// Reads a file's contents, returning `None` for binary or non-UTF-8 data.
+fn read_text(path: &Path) -> io::Result<Option<String>> {
     let contents = fs::read(path)?;
     if contents.contains(&0) {
-        return Ok(0);
+        return Ok(None);
     }
-    let Ok(text) = std::str::from_utf8(&contents) else {
-        return Ok(0);
-    };
-    Ok(text.lines().fold(0_u64, |lines, _| lines.saturating_add(1)))
+    Ok(String::from_utf8(contents).ok())
 }
 
 fn classify(path: &Path) -> (NodeKind, Option<&'static str>, bool) {
@@ -467,24 +565,100 @@ fn classify(path: &Path) -> (NodeKind, Option<&'static str>, bool) {
     }
 }
 
-fn git_branch(root: &Path) -> Option<String> {
-    let dot_git = root.join(".git");
-    let git_directory = if dot_git.is_dir() {
-        dot_git
-    } else if dot_git.is_file() {
-        let contents = fs::read_to_string(&dot_git).ok()?;
-        let path = contents.lines().next()?.strip_prefix("gitdir:")?.trim();
-        let path = PathBuf::from(path);
-        if path.is_absolute() {
-            path
-        } else {
-            root.join(path)
-        }
-    } else {
-        return None;
-    };
+const MAX_SUMMARY_CHARS: usize = 480;
 
+/// Attaches summaries from a `.codebase-index/` markdown mirror (see the
+/// codebase-index convention: one `<path>.md` per scanned path, `_root.md`
+/// for the repository root) to the nodes they describe.
+fn attach_index_summaries(root: &Path, nodes: &mut [RepositoryNode], warnings: &mut Vec<String>) {
+    let index_root = root.join(".codebase-index");
+    if !index_root.is_dir() {
+        return;
+    }
+    for node in nodes.iter_mut() {
+        let entry = if node.id == "." {
+            index_root.join("_root.md")
+        } else {
+            index_root.join(format!("{}.md", node.id))
+        };
+        if let Ok(text) = fs::read_to_string(entry) {
+            node.description = index_summary(&text);
+        }
+    }
+
+    let last_indexed = fs::read_to_string(index_root.join(".last-commit"))
+        .map(|hash| hash.trim().to_owned())
+        .ok();
+    if let (Some(last_indexed), Some(head)) = (last_indexed, git_head_commit(root)) {
+        if last_indexed != head {
+            warnings.push(
+                "The codebase index is behind HEAD; module summaries may be stale.".to_owned(),
+            );
+        }
+    }
+}
+
+/// First paragraph after the title heading, bounded for the inspector.
+fn index_summary(text: &str) -> Option<String> {
+    let mut lines = text.lines().skip_while(|line| {
+        let line = line.trim();
+        line.is_empty() || line.starts_with('#')
+    });
+    let mut summary = lines.next()?.trim().to_owned();
+    for line in lines {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            break;
+        }
+        summary.push(' ');
+        summary.push_str(line);
+    }
+    if summary.chars().count() > MAX_SUMMARY_CHARS {
+        summary = summary.chars().take(MAX_SUMMARY_CHARS).collect::<String>() + "…";
+    }
+    (!summary.is_empty()).then_some(summary)
+}
+
+fn git_head_commit(root: &Path) -> Option<String> {
+    let git_directory = git_directory(root)?;
     let head = fs::read_to_string(git_directory.join("HEAD")).ok()?;
+    let head = head.trim();
+    let Some(reference) = head.strip_prefix("ref:") else {
+        return (!head.is_empty()).then(|| head.to_owned());
+    };
+    let reference = reference.trim();
+    if let Ok(hash) = fs::read_to_string(git_directory.join(reference)) {
+        return Some(hash.trim().to_owned());
+    }
+    // Ref may be packed instead of loose.
+    let packed = fs::read_to_string(git_directory.join("packed-refs")).ok()?;
+    packed.lines().find_map(|line| {
+        line.strip_suffix(reference)
+            .map(|hash| hash.trim().to_owned())
+            .filter(|hash| !hash.is_empty())
+    })
+}
+
+fn git_directory(root: &Path) -> Option<PathBuf> {
+    let dot_git = root.join(".git");
+    if dot_git.is_dir() {
+        return Some(dot_git);
+    }
+    if !dot_git.is_file() {
+        return None;
+    }
+    let contents = fs::read_to_string(&dot_git).ok()?;
+    let path = contents.lines().next()?.strip_prefix("gitdir:")?.trim();
+    let path = PathBuf::from(path);
+    Some(if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    })
+}
+
+fn git_branch(root: &Path) -> Option<String> {
+    let head = fs::read_to_string(git_directory(root)?.join("HEAD")).ok()?;
     let reference = head.trim().strip_prefix("ref:")?.trim();
     let branch = reference.strip_prefix("refs/heads/")?;
     (!branch.is_empty()).then(|| branch.to_owned())
@@ -557,6 +731,7 @@ mod tests {
                 directories: 1,
                 lines: 5,
                 line_count_available: true,
+                imports_available: true,
                 bytes: 52,
                 languages: vec![
                     LanguageStat {
@@ -584,5 +759,87 @@ mod tests {
             scan_repository_path(&repository.path().join("missing")),
             Err("Selected folder does not exist.".to_owned())
         );
+    }
+
+    #[test]
+    fn resolves_import_edges_across_workspace_packages() {
+        let repository = tempfile::tempdir().expect("create test repository");
+        let root = repository.path();
+        fs::create_dir_all(root.join("web")).expect("create web package");
+        fs::create_dir_all(root.join("lib")).expect("create lib package");
+        fs::create_dir_all(root.join("engine/src")).expect("create engine crate");
+        fs::write(root.join("web/package.json"), "{\"name\": \"@atlas/web\"}\n")
+            .expect("write web manifest");
+        fs::write(
+            root.join("web/index.ts"),
+            "import { u } from \"./util\";\nimport lib from \"@atlas/lib\";\nimport external from \"react\";\n",
+        )
+        .expect("write web entry");
+        fs::write(root.join("web/util.ts"), "export const u = 1;\n").expect("write web util");
+        fs::write(root.join("lib/package.json"), "{\"name\": \"@atlas/lib\"}\n")
+            .expect("write lib manifest");
+        fs::write(root.join("lib/index.ts"), "export default 1;\n").expect("write lib entry");
+        fs::write(
+            root.join("engine/Cargo.toml"),
+            "[package]\nname = \"engine\"\n",
+        )
+        .expect("write engine manifest");
+        fs::write(
+            root.join("engine/src/lib.rs"),
+            "use crate::scan::Scanner;\nuse std::fs;\nmod scan;\nmod util;\n",
+        )
+        .expect("write engine root");
+        fs::write(root.join("engine/src/scan.rs"), "use super::util::helper;\n")
+            .expect("write engine scan");
+        fs::write(root.join("engine/src/util.rs"), "pub fn helper() {}\n")
+            .expect("write engine util");
+        fs::create_dir_all(root.join(".codebase-index/web")).expect("create index directory");
+        fs::write(
+            root.join(".codebase-index/_root.md"),
+            "# .\n\nA test workspace with web and engine halves.\nIt exists for the scanner tests.\n\nDeeper detail nobody should see in the summary.\n",
+        )
+        .expect("write root index entry");
+        fs::write(
+            root.join(".codebase-index/web/index.ts.md"),
+            "# web/index.ts\n\nEntry point wiring util and the lib package.\n",
+        )
+        .expect("write file index entry");
+
+        let graph = scan_repository_path(root).expect("scan repository");
+        let imports: Vec<(&str, &str)> = graph
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == EdgeKind::Imports)
+            .map(|edge| (edge.source.as_str(), edge.target.as_str()))
+            .collect();
+
+        assert_eq!(
+            imports,
+            [
+                ("engine/src/lib.rs", "engine/src/scan.rs"),
+                ("engine/src/scan.rs", "engine/src/util.rs"),
+                ("web/index.ts", "lib/index.ts"),
+                ("web/index.ts", "web/util.ts"),
+            ]
+        );
+        assert!(graph.stats.imports_available);
+
+        let by_id = |id: &str| {
+            graph
+                .nodes
+                .iter()
+                .find(|node| node.id == id)
+                .unwrap_or_else(|| panic!("node {id}"))
+        };
+        assert!(!graph.nodes.iter().any(|node| node.id.starts_with(".codebase-index")));
+        assert_eq!(
+            by_id(".").description.as_deref(),
+            Some("A test workspace with web and engine halves. It exists for the scanner tests."),
+        );
+        assert_eq!(
+            by_id("web/index.ts").description.as_deref(),
+            Some("Entry point wiring util and the lib package."),
+        );
+        assert_eq!(by_id("web/util.ts").description, None);
     }
 }
