@@ -1,0 +1,245 @@
+/* Shared UI primitives. Structural/layout one-offs stay in App.css; anything
+   here is used by two or more features and styles a component in ui/. */
+
+/* Micro-label: small uppercase index/eyebrow text */
+.section-index {
+  color: var(--olive);
+  font-size: var(--fs-small);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* Panel heading: index + title row with an optional action (SectionHeading) */
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 55px;
+  padding: 8px 13px;
+  border-bottom: 1px solid var(--line);
+}
+
+.section-heading h1,
+.section-heading h2,
+.section-heading h3 {
+  margin: 3px 0 0;
+  font-size: var(--fs-title);
+  font-weight: 700;
+  letter-spacing: var(--ls-label);
+  text-transform: uppercase;
+}
+
+/* Segmented control: a strip of buttons sharing hairline dividers (Seg).
+   Pressed/selected/current segments fill with ink; the strike variant
+   crosses out unpressed toggles instead of filling pressed ones. */
+.seg {
+  display: flex;
+  pointer-events: auto;
+}
+
+.seg > button {
+  min-height: 29px;
+  padding: 0 8px;
+  border-right: 1px solid var(--hairline);
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--fs-label);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.seg > button:last-child {
+  border-right: 0;
+}
+
+.seg > button[aria-pressed="true"],
+.seg > button[aria-selected="true"],
+.seg > button.is-current {
+  background: var(--ink);
+  color: var(--paper-light);
+}
+
+.seg--strike > button[aria-pressed="true"] {
+  background: transparent;
+  color: inherit;
+}
+
+.seg--strike > button[aria-pressed="false"] {
+  color: var(--olive);
+  text-decoration: line-through;
+}
+
+/* Plate: translucent paper surface for controls and readouts floating above
+   the scene */
+.plate {
+  border: 1px solid var(--line);
+  background: var(--plate);
+  pointer-events: auto;
+}
+
+/* Stat: micro-label over value (Stat). Contexts may reverse the stack. */
+.stat {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  overflow: hidden;
+}
+
+.stat span {
+  color: var(--olive);
+  font-size: var(--fs-label);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.stat strong {
+  overflow: hidden;
+  font-size: var(--fs-title);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Register: numbered list of name/value rows, optionally selectable and
+   optionally carrying a kind mark (Register) */
+.register {
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--hairline);
+  list-style: none;
+  counter-reset: register;
+}
+
+.register li {
+  border-bottom: 1px solid var(--hairline);
+  counter-increment: register;
+}
+
+.register li > button,
+.register li > div {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: baseline;
+  width: 100%;
+  padding: 7px 13px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: var(--fs-label);
+  text-align: left;
+}
+
+.register li > button {
+  cursor: pointer;
+}
+
+.register li > .has-kind {
+  grid-template-columns: 24px 7px minmax(0, 1fr) auto;
+}
+
+.register li > .has-kind .kind-mark {
+  align-self: center;
+}
+
+.register li > button::before,
+.register li > div::before {
+  color: var(--olive);
+  content: counter(register, decimal-leading-zero);
+}
+
+.register li > button:hover span,
+.register li > button:focus-visible span {
+  text-decoration: underline;
+}
+
+.register span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.register b {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Kind mark: 7px swatch identifying a node kind (KindMark), plus the SVG
+   fill equivalents used by flow chips */
+.kind-mark {
+  display: block;
+  width: 7px;
+  height: 7px;
+  border: 1px solid currentColor;
+  background: transparent;
+}
+
+.kind-directory,
+.kind-repository {
+  background: var(--kind-directory);
+}
+
+.kind-source {
+  background: var(--kind-source);
+}
+
+.kind-config {
+  background: var(--kind-config);
+}
+
+.kind-documentation {
+  background: var(--kind-documentation);
+}
+
+.kind-asset {
+  border-style: dotted;
+  background: var(--kind-asset);
+}
+
+.chip-mark {
+  stroke: var(--ink);
+}
+
+.chip-directory,
+.chip-repository {
+  fill: var(--kind-directory);
+}
+
+.chip-source {
+  fill: var(--kind-source);
+}
+
+.chip-config {
+  fill: var(--kind-config);
+}
+
+.chip-documentation {
+  fill: var(--kind-documentation);
+}
+
+.chip-asset {
+  fill: var(--kind-asset);
+}
+
+/* Buttons: ink-filled primary and outlined ghost. Sizing stays contextual. */
+.btn-ink,
+.btn-ghost {
+  cursor: pointer;
+  letter-spacing: var(--ls-label);
+  text-transform: uppercase;
+}
+
+.btn-ink {
+  border: 1px solid var(--ink);
+  background: var(--ink);
+  color: var(--paper-light);
+}
+
+.btn-ghost {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: inherit;
+}

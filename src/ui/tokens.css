@@ -1,0 +1,62 @@
+/* Design tokens — the single source of truth for the Codebase Atlas look
+   (technical-manual olive/paper). Every color, type size, and surface used by
+   the UI, the SVG flow diagram, and the 3D map lives here; components read
+   tokens, never literal values. The 3D scene reads them through ui/theme.ts. */
+
+:root {
+  /* Ground palette */
+  --paper: #d7cf9f;
+  --paper-light: #e2dbaa;
+  --paper-dark: #b8b17e;
+  --ink: #14150f;
+  --olive: #5d6046;
+  --faint: #88845c;
+  --rust: #713618;
+
+  /* Lines and surfaces */
+  --line: rgba(20, 21, 15, 0.52);
+  --hairline: rgba(20, 21, 15, 0.25);
+  --ink-wash: rgba(20, 21, 15, 0.07);
+  --rust-wash: rgba(113, 54, 24, 0.06);
+  --rust-line: rgba(113, 54, 24, 0.22);
+  /* Translucent paper plate for overlays floating above the scene */
+  --plate: rgba(215, 207, 159, 0.9);
+
+  /* Type */
+  --font-mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Menlo, Consolas, monospace;
+  --font-serif: Georgia, "Times New Roman", serif;
+  --fs-nano: 7px;
+  --fs-label: 8px;
+  --fs-small: 9px;
+  --fs-base: 10px;
+  --fs-title: 11px;
+  --fs-heading: 13px;
+  --fs-prose: 14px;
+  --ls-label: 0.08em;
+
+  /* Kind palette — flat UI swatches (module rail marks, flow chips) */
+  --kind-repository: #77724d;
+  --kind-directory: #77724d;
+  --kind-source: #b1a76d;
+  --kind-config: #827a4d;
+  --kind-documentation: #c0b77c;
+  --kind-asset: #9c9462;
+
+  /* Map (3D) palette — lit-scene variants of the kind palette plus scene
+     furniture. Consumed by RepositoryScene via ui/theme.ts. */
+  --map-repository: #8e8552;
+  --map-directory: #b0a873;
+  --map-directory-alt: #a29a66;
+  --map-source: #c8c08c;
+  --map-config: #978d58;
+  --map-documentation: #b8ad72;
+  --map-asset: #a39a68;
+  --map-outline: #292a20;
+  --map-glow: #f1e8b6;
+  --map-hover: #8f854d;
+  --map-search-hit: #b46f3d;
+  --map-import-source: #8c8258;
+  --map-import-target: #7c2d12;
+  --map-grid-major: #77734f;
+  --map-grid-minor: #aaa474;
+}
