@@ -12,7 +12,6 @@ import type {
   LayerVisibility,
   RepositoryGraph,
   RepositoryNode,
-  RepositoryNodeKind,
 } from "./model";
 import { layerForNode } from "./model";
 import {
@@ -21,6 +20,10 @@ import {
   type LayoutModule,
   type RepositoryLayout,
 } from "./repositoryLayout";
+import { nodeGlyph, scaleOf } from "./location";
+import { mapPalette, type MapPalette } from "./ui/theme";
+
+const MAX_FILE_LABELS = 48;
 
 export interface RepositorySceneHandle {
   resetCamera: () => void;
@@ -50,8 +53,16 @@ interface SceneVisual {
 interface ImportVisual {
   source: string;
   target: string;
-  line: THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial>;
+  weight: number;
+  group: THREE.Group;
+  materials: THREE.MeshBasicMaterial[];
   baseOpacity: number;
+}
+
+interface HoveredFlow {
+  source: RepositoryNode;
+  target: RepositoryNode;
+  weight: number;
 }
 
 interface SceneEngine {
@@ -64,34 +75,29 @@ interface SceneEngine {
   importsGroup: THREE.Group;
   visuals: Map<string, SceneVisual>;
   hitTargets: THREE.Mesh[];
+  arcTargets: THREE.Mesh[];
   importVisuals: ImportVisual[];
   hoveredId: string | null;
+  hoveredFlowIndex: number | null;
   render: () => void;
   updateVisuals: () => void;
 }
 
-const moduleColors: Record<RepositoryNodeKind, number> = {
-  repository: 0x8e8552,
-  directory: 0xb0a873,
-  source: 0xc8c08c,
-  config: 0x978d58,
-  documentation: 0xb8ad72,
-  asset: 0xa39a68,
-};
-
-function createLabel(text: string) {
+function createLabel(palette: MapPalette, text: string, kind: "district" | "file" = "district") {
+  const compact = kind === "file";
   const canvas = document.createElement("canvas");
-  canvas.width = 384;
-  canvas.height = 72;
+  canvas.width = compact ? 160 : 384;
+  canvas.height = compact ? 48 : 72;
   const context = canvas.getContext("2d");
   if (!context) return null;
 
   context.clearRect(0, 0, canvas.width, canvas.height);
-  context.fillStyle = "#14150f";
-  context.font = "600 24px ui-monospace, SFMono-Regular, Menlo, monospace";
+  context.fillStyle = palette.ink;
+  context.font = `${compact ? "700 20px" : "600 24px"} ${palette.fontMono}`;
   context.textAlign = "center";
   context.textBaseline = "middle";
-  const label = text.length > 27 ? `${text.slice(0, 25)}..` : text;
+  const max = compact ? 6 : 27;
+  const label = text.length > max ? `${text.slice(0, max - 2)}..` : text;
   context.fillText(label.toUpperCase(), canvas.width / 2, canvas.height / 2);
 
   const texture = new THREE.CanvasTexture(canvas);
@@ -102,7 +108,7 @@ function createLabel(text: string) {
     depthTest: false,
   });
   const sprite = new THREE.Sprite(material);
-  sprite.scale.set(5.4, 1.02, 1);
+  sprite.scale.set(compact ? 2.2 : 5.4, compact ? 0.46 : 1.02, 1);
   sprite.renderOrder = 4;
   return { sprite, material };
 }
@@ -137,21 +143,30 @@ function populateLayout(engine: SceneEngine, layout: RepositoryLayout) {
   clearGroup(engine.importsGroup);
   engine.visuals.clear();
   engine.hitTargets.length = 0;
+  engine.arcTargets.length = 0;
   engine.importVisuals.length = 0;
   engine.hoveredId = null;
+  engine.hoveredFlowIndex = null;
 
+  const palette = mapPalette();
   const modulesById = new Map(layout.modules.map((module) => [module.node.id, module]));
+  const fileIds = layout.modules
+    .filter((module) => module.node.kind !== "directory" && module.node.kind !== "repository")
+    .sort((left, right) => right.node.depth - left.node.depth)
+    .slice(0, MAX_FILE_LABELS)
+    .map((module) => module.node.id);
+  const labelFiles = new Set(fileIds);
 
   for (const module of layout.modules) {
-    const visual = createModuleVisual(module);
+    const visual = createModuleVisual(palette, module, labelFiles.has(module.node.id));
     engine.modulesGroup.add(visual.group);
     engine.hitTargets.push(visual.mesh);
     engine.visuals.set(module.node.id, visual);
   }
 
   const maxImportWeight = Math.max(1, ...layout.imports.map((flow) => flow.weight));
-  const importSourceColor = new THREE.Color(0x8c8258);
-  const importTargetColor = new THREE.Color(0x7c2d12);
+  const importSourceColor = new THREE.Color(palette.importSource);
+  const importTargetColor = new THREE.Color(palette.importTarget);
   for (const flow of layout.imports) {
     const source = modulesById.get(flow.source);
     const target = modulesById.get(flow.target);
@@ -161,38 +176,79 @@ function populateLayout(engine: SceneEngine, layout: RepositoryLayout) {
     const to = new THREE.Vector3(target.x, target.y + target.height + 0.1, target.z);
     const mid = from.clone().add(to).multiplyScalar(0.5);
     mid.y += 1.1 + from.distanceTo(to) * 0.16;
-    const points = new THREE.QuadraticBezierCurve3(from, mid, to).getPoints(24);
-    const geometry = new THREE.BufferGeometry().setFromPoints(points);
-    const colors = new Float32Array(points.length * 3);
-    for (let index = 0; index < points.length; index += 1) {
-      const color = importSourceColor
-        .clone()
-        .lerp(importTargetColor, index / (points.length - 1));
-      colors.set([color.r, color.g, color.b], index * 3);
+    const curve = new THREE.QuadraticBezierCurve3(from, mid, to);
+
+    // Girth carries import count; WebGL ignores line width, so tubes, not lines.
+    const radius = 0.05 + 0.24 * Math.sqrt(flow.weight / maxImportWeight);
+    const tubularSegments = 24;
+    const radialSegments = 6;
+    const geometry = new THREE.TubeGeometry(curve, tubularSegments, radius, radialSegments, false);
+    const vertexCount = geometry.attributes.position.count;
+    const ringSize = radialSegments + 1;
+    const colors = new Float32Array(vertexCount * 3);
+    const ringColor = new THREE.Color();
+    for (let index = 0; index < vertexCount; index += 1) {
+      const progress = Math.min(1, Math.floor(index / ringSize) / tubularSegments);
+      ringColor.copy(importSourceColor).lerp(importTargetColor, progress);
+      colors.set([ringColor.r, ringColor.g, ringColor.b], index * 3);
     }
     geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
 
-    const baseOpacity = 0.34 + 0.5 * (flow.weight / maxImportWeight);
-    const material = new THREE.LineBasicMaterial({
+    const baseOpacity = 0.55 + 0.35 * (flow.weight / maxImportWeight);
+    const tubeMaterial = new THREE.MeshBasicMaterial({
       vertexColors: true,
       transparent: true,
       opacity: baseOpacity,
     });
-    const line = new THREE.Line(geometry, material);
-    line.renderOrder = 1;
-    engine.importsGroup.add(line);
-    engine.importVisuals.push({ source: flow.source, target: flow.target, line, baseOpacity });
+    const tube = new THREE.Mesh(geometry, tubeMaterial);
+    tube.renderOrder = 1;
+
+    // Arrowhead lands on the imported module, giving each arc a direction.
+    const headMaterial = new THREE.MeshBasicMaterial({
+      color: importTargetColor,
+      transparent: true,
+      opacity: baseOpacity,
+    });
+    const headHeight = Math.min(1.1, radius * 6);
+    const head = new THREE.Mesh(
+      new THREE.ConeGeometry(radius * 2.4, headHeight, 8),
+      headMaterial,
+    );
+    const tangent = curve.getTangent(1).normalize();
+    head.position.copy(to).addScaledVector(tangent, -headHeight / 2);
+    head.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), tangent);
+    head.renderOrder = 1;
+
+    const flowIndex = engine.importVisuals.length;
+    tube.userData.flowIndex = flowIndex;
+    head.userData.flowIndex = flowIndex;
+    const arc = new THREE.Group();
+    arc.add(tube, head);
+    engine.importsGroup.add(arc);
+    engine.arcTargets.push(tube, head);
+    engine.importVisuals.push({
+      source: flow.source,
+      target: flow.target,
+      weight: flow.weight,
+      group: arc,
+      materials: [tubeMaterial, headMaterial],
+      baseOpacity,
+    });
   }
 }
 
-function createModuleVisual(module: LayoutModule): SceneVisual {
+function createModuleVisual(
+  palette: MapPalette,
+  module: LayoutModule,
+  labelFile = false,
+): SceneVisual {
   const geometry = new THREE.BoxGeometry(module.width, module.height, module.depth);
   const baseColor =
     module.node.kind === "directory" || module.node.kind === "repository"
       ? module.node.depth % 2 === 0
-        ? moduleColors[module.node.kind]
-        : 0xa29a66
-      : moduleColors[module.node.kind];
+        ? palette.kind[module.node.kind]
+        : palette.directoryAlt
+      : palette.kind[module.node.kind];
   const fill = new THREE.MeshStandardMaterial({
     color: baseColor,
     roughness: 1,
@@ -204,7 +260,7 @@ function createModuleVisual(module: LayoutModule): SceneVisual {
   mesh.userData.nodeId = module.node.id;
 
   const wire = new THREE.LineBasicMaterial({
-    color: 0x292a20,
+    color: palette.outline,
     transparent: true,
     opacity: 0.8,
   });
@@ -216,10 +272,16 @@ function createModuleVisual(module: LayoutModule): SceneVisual {
   group.add(mesh, outline);
 
   let label = null;
-  if (module.node.kind === "repository" || module.node.kind === "directory") {
-    label = createLabel(module.node.name);
+  if (
+    labelFile &&
+    module.node.kind !== "repository" &&
+    module.node.kind !== "directory"
+  ) {
+    label = createLabel(palette, nodeGlyph(module.node), "file");
     if (label) {
-      label.sprite.position.set(0, module.height + 0.62, 0);
+      const width = Math.max(1.4, Math.min(2.8, module.width * 0.9));
+      label.sprite.scale.set(width, width * 0.21, 1);
+      label.sprite.position.set(0, module.height + 0.34, 0);
       group.add(label.sprite);
     }
   }
@@ -246,6 +308,7 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
     const layersRef = useRef(layers);
     const onSelectRef = useRef(onSelect);
     const [hoveredNode, setHoveredNode] = useState<RepositoryNode | null>(null);
+    const [hoveredFlow, setHoveredFlow] = useState<HoveredFlow | null>(null);
     const [sceneError, setSceneError] = useState<string | null>(null);
 
     const revealedKey = useMemo(
@@ -280,9 +343,10 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
       const host: HTMLDivElement = mount;
 
       setSceneError(null);
+      const palette = mapPalette();
       const world = buildRepositoryLayout(graph, maxDepth);
       const scene = new THREE.Scene();
-      scene.background = new THREE.Color(0xd7cf9f);
+      scene.background = new THREE.Color(palette.paper);
 
       let renderer: THREE.WebGLRenderer;
       try {
@@ -322,8 +386,8 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
       const grid = new THREE.GridHelper(
         gridSize,
         Math.max(12, Math.round(gridSize / 4.8)),
-        0x77734f,
-        0xaaa474,
+        palette.gridMajor,
+        palette.gridMinor,
       );
       grid.position.y = -0.035;
       const gridMaterials = Array.isArray(grid.material) ? grid.material : [grid.material];
@@ -356,8 +420,10 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
         importsGroup,
         visuals: new Map(),
         hitTargets: [],
+        arcTargets: [],
         importVisuals: [],
         hoveredId: null,
+        hoveredFlowIndex: null,
         render: () => {
           renderer.render(scene, camera);
         },
@@ -385,30 +451,45 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
           visual.group.visible = visible;
           visual.mesh.visible = visible;
           visual.fill.color.setHex(
-            selected ? 0x292a20 : hovered ? 0x8f854d : matches && query ? 0xb46f3d : visual.baseColor,
+            selected
+              ? palette.outline
+              : hovered
+                ? palette.hover
+                : matches && query
+                  ? palette.searchHit
+                  : visual.baseColor,
           );
           visual.fill.opacity = query && !matches ? 0.18 : 1;
-          visual.wire.color.setHex(selected ? 0xf1e8b6 : matches && query ? 0x713618 : 0x292a20);
+          visual.wire.color.setHex(
+            selected ? palette.glow : matches && query ? palette.rust : palette.outline,
+          );
           visual.wire.opacity = query && !matches ? 0.16 : selected ? 1 : 0.8;
           if (visual.label) visual.label.opacity = query && !matches ? 0.22 : 1;
         }
 
         const selected = selectedIdRef.current;
-        const selectionHasFlow =
+        // A selected district's arcs attach to its revealed children, so an
+        // endpoint inside the selection counts (ids are paths). The root is
+        // everything's ancestor; emphasizing all arcs would emphasize none.
+        const inSelection = (id: string) =>
           selected !== null &&
-          engine.importVisuals.some((flow) => flow.source === selected || flow.target === selected);
-        for (const flow of engine.importVisuals) {
+          selected !== "." &&
+          (id === selected || id.startsWith(`${selected}/`));
+        const selectionHasFlow = engine.importVisuals.some(
+          (flow) => inSelection(flow.source) || inSelection(flow.target),
+        );
+        for (const [index, flow] of engine.importVisuals.entries()) {
           const source = engine.visuals.get(flow.source);
           const target = engine.visuals.get(flow.target);
-          flow.line.visible =
+          flow.group.visible =
             layersRef.current.imports && Boolean(source?.group.visible && target?.group.visible);
-          const touchesSelection =
-            selected !== null && (flow.source === selected || flow.target === selected);
-          flow.line.material.opacity = touchesSelection
-            ? 1
-            : selectionHasFlow
-              ? flow.baseOpacity * 0.45
-              : flow.baseOpacity;
+          const touchesSelection = inSelection(flow.source) || inSelection(flow.target);
+          const hot = index === engine.hoveredFlowIndex || touchesSelection;
+          // A selection's flow must dominate: unrelated arcs drop to a faint
+          // context layer and hot arcs draw over rooftops and dim arcs alike.
+          const opacity = hot ? 1 : selectionHasFlow ? flow.baseOpacity * 0.12 : flow.baseOpacity;
+          for (const material of flow.materials) material.opacity = opacity;
+          for (const child of flow.group.children) child.renderOrder = hot ? 3 : 1;
         }
         render();
       }
@@ -432,11 +513,26 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
 
       function handlePointerMove(event: PointerEvent) {
         const hit = pointFromEvent(event);
-        const nextId = hit?.object.userData.nodeId ?? null;
-        if (nextId === engine.hoveredId) return;
+        const arcHit = raycaster
+          .intersectObjects(engine.arcTargets, false)
+          .find((candidate) => candidate.object.parent?.visible);
+        // Whichever is nearer the camera wins: arcs fly in front of rooftops.
+        const arcWins = arcHit && (!hit || arcHit.distance < hit.distance);
+        const nextId = arcWins ? null : (hit?.object.userData.nodeId ?? null);
+        const nextFlowIndex = arcWins ? (arcHit.object.userData.flowIndex as number) : null;
+        if (nextId === engine.hoveredId && nextFlowIndex === engine.hoveredFlowIndex) return;
         engine.hoveredId = nextId;
+        engine.hoveredFlowIndex = nextFlowIndex;
         renderer.domElement.style.cursor = nextId ? "pointer" : "grab";
         setHoveredNode(nextId ? (engine.visuals.get(nextId)?.node ?? null) : null);
+        const flow = nextFlowIndex !== null ? engine.importVisuals[nextFlowIndex] : null;
+        const flowSource = flow ? engine.visuals.get(flow.source)?.node : null;
+        const flowTarget = flow ? engine.visuals.get(flow.target)?.node : null;
+        setHoveredFlow(
+          flow && flowSource && flowTarget
+            ? { source: flowSource, target: flowTarget, weight: flow.weight }
+            : null,
+        );
         updateVisuals();
       }
 
@@ -453,7 +549,9 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
 
       function handlePointerLeave() {
         engine.hoveredId = null;
+        engine.hoveredFlowIndex = null;
         setHoveredNode(null);
+        setHoveredFlow(null);
         updateVisuals();
       }
 
@@ -461,7 +559,7 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
         const width = Math.max(1, host.clientWidth);
         const height = Math.max(1, host.clientHeight);
         const aspect = width / height;
-        const fittedHeight = world.extent * 2.18 * (aspect < 1 ? 1 / aspect : 1);
+        const fittedHeight = world.extent * 1.46 * (aspect < 1 ? 1 / aspect : 1);
         camera.left = (-fittedHeight * aspect) / 2;
         camera.right = (fittedHeight * aspect) / 2;
         camera.top = fittedHeight / 2;
@@ -536,6 +634,7 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
       if (!engine) return;
       populateLayout(engine, layout);
       setHoveredNode(null);
+      setHoveredFlow(null);
       engine.updateVisuals();
       return () => {
         const current = engineRef.current;
@@ -544,6 +643,7 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
         clearGroup(current.importsGroup);
         current.visuals.clear();
         current.hitTargets.length = 0;
+        current.arcTargets.length = 0;
         current.importVisuals.length = 0;
       };
     }, [layout]);
@@ -560,8 +660,19 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
         {sceneError ? <p className="scene-error">{sceneError}</p> : null}
         {hoveredNode ? (
           <div className="scene-readout" aria-hidden="true">
-            <span>{hoveredNode.kind}</span>
-            <strong>{hoveredNode.name}</strong>
+            <span>
+              {scaleOf(hoveredNode)} · {hoveredNode.kind}
+            </span>
+            <strong>{hoveredNode.path === "." ? hoveredNode.name : hoveredNode.path}</strong>
+          </div>
+        ) : hoveredFlow ? (
+          <div className="scene-readout" aria-hidden="true">
+            <span>
+              {hoveredFlow.weight === 1 ? "1 import" : `${hoveredFlow.weight} imports`}
+            </span>
+            <strong>
+              {hoveredFlow.source.name} → {hoveredFlow.target.name}
+            </strong>
           </div>
         ) : null}
         {layout.modules.length < graph.nodes.length ? (

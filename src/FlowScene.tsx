@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
-import type { RepositoryGraph, RepositoryNode } from "./model";
+import { useMemo, useRef, useState } from "react";
+import type { LayerVisibility, RepositoryGraph, RepositoryNode } from "./model";
 import { buildFlowLayout, type FlowChip } from "./flowLayout";
 import type { ImportFlow } from "./repositoryLayout";
+import RepositoryScene from "./RepositoryScene";
 
 interface FlowSceneProps {
   graph: RepositoryGraph;
@@ -12,7 +13,10 @@ interface FlowSceneProps {
 }
 
 const CHIP_W = 176;
-const CHIP_H = 46;
+// Chip height scales with module size: the min fits name and meta, the max
+// leaves room for a wrapped description inside the card.
+const CHIP_H_MIN = 46;
+const CHIP_H_MAX = 118;
 const COL_GAP = 128;
 const ROW_GAP = 20;
 const MARGIN_X = 56;
@@ -28,6 +32,28 @@ const edgeKey = (edge: ImportFlow) => `${edge.source}→${edge.target}`;
 
 function chipLabel(name: string) {
   return name.length > 21 ? `${name.slice(0, 19)}..` : name;
+}
+
+// Greedy word wrap for the in-card description; ~36 serif glyphs span the plate.
+function wrapDescription(text: string, maxLines: number): string[] {
+  if (maxLines <= 0) return [];
+  const lines: string[] = [];
+  let line = "";
+  for (const word of text.split(/\s+/)) {
+    const next = line ? `${line} ${word}` : word;
+    if (next.length > 36 && line) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = next;
+    }
+  }
+  if (line) lines.push(line);
+  if (lines.length > maxLines) {
+    lines.length = maxLines;
+    lines[maxLines - 1] = `${lines[maxLines - 1].slice(0, 34)}…`;
+  }
+  return lines;
 }
 
 function columnLabel(column: number, columnCount: number) {
@@ -72,6 +98,80 @@ function trace(id: string, edges: ImportFlow[]) {
   return { chips, hot };
 }
 
+// All layers stay on in the inset; the main map view keeps the layer toggles.
+const MINI_LAYERS: LayerVisibility = {
+  structure: true,
+  source: true,
+  config: true,
+  docs: true,
+  imports: true,
+};
+
+interface MiniMapProps {
+  graph: RepositoryGraph;
+  node: RepositoryNode;
+  searchQuery: string;
+  depth: number;
+  onSelect: (id: string) => void;
+}
+
+// The real 3D map embedded as an inset: same scene, import arcs, and district
+// reveal as the map view, aggregated at the flow's effective depth. Resizable
+// by dragging its top-right corner.
+function MiniMap({ graph, node, searchQuery, depth, onSelect }: MiniMapProps) {
+  const [size, setSize] = useState({ width: 380, height: 320 });
+  const drag = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
+
+  return (
+    <figure className="flow-minimap" style={size} aria-label={`Map location of ${node.path}`}>
+      <figcaption>{`MAP / ${node.path === "." ? node.name : node.path}`}</figcaption>
+      <button
+        type="button"
+        className="mini-resize"
+        aria-label="Drag to resize the map inset"
+        onPointerDown={(event) => {
+          drag.current = { x: event.clientX, y: event.clientY, ...size };
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }}
+        onPointerMove={(event) => {
+          const start = drag.current;
+          if (!start) return;
+          setSize({
+            width: Math.min(
+              Math.max(240, start.width - (event.clientX - start.x)),
+              window.innerWidth - 120,
+            ),
+            height: Math.min(
+              Math.max(200, start.height - (event.clientY - start.y)),
+              window.innerHeight - 220,
+            ),
+          });
+        }}
+        onPointerUp={() => {
+          drag.current = null;
+        }}
+        onPointerCancel={() => {
+          drag.current = null;
+        }}
+      >
+        ⤡
+      </button>
+      <div className="mini-scene">
+        <RepositoryScene
+          graph={graph}
+          selectedId={node.id}
+          searchQuery={searchQuery}
+          layers={MINI_LAYERS}
+          maxDepth={depth}
+          onSelect={(id) => {
+            if (id) onSelect(id);
+          }}
+        />
+      </div>
+    </figure>
+  );
+}
+
 function FlowScene({ graph, selectedId, searchQuery, maxDepth, onSelect }: FlowSceneProps) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   // Touch-primary devices (iPad) have no hover; tracing rides selection there.
@@ -82,6 +182,11 @@ function FlowScene({ graph, selectedId, searchQuery, maxDepth, onSelect }: FlowS
     [layout],
   );
 
+  // The minimap follows the app selection even when it is finer than a chip.
+  const selectedNode = useMemo(
+    () => (selectedId ? (graph.nodes.find((node) => node.id === selectedId) ?? null) : null),
+    [graph, selectedId],
+  );
   const validId = (id: string | null) => (id !== null && chipById.has(id) ? id : null);
   const traceId = validId(hoveredId) ?? validId(selectedId);
   const active = useMemo(
@@ -113,10 +218,27 @@ function FlowScene({ graph, selectedId, searchQuery, maxDepth, onSelect }: FlowS
   }
 
   const chipX = (column: number) => MARGIN_X + column * (CHIP_W + COL_GAP);
-  const chipY = (row: number) => HEADER_Y + row * (CHIP_H + ROW_GAP);
   const width = MARGIN_X * 2 + layout.columnCount * CHIP_W + (layout.columnCount - 1) * COL_GAP;
-  const height = HEADER_Y + layout.rowCount * (CHIP_H + ROW_GAP) - ROW_GAP + MARGIN_BOTTOM;
   const maxWeight = Math.max(1, ...layout.edges.map((edge) => edge.weight));
+  // Module sizes are power-law distributed; sqrt keeps small modules visible
+  // without flattening the giants the way a log scale would.
+  const sizeOf = (node: RepositoryNode) =>
+    graph.stats.lineCountAvailable ? node.lines : node.sizeBytes;
+  const maxSize = Math.max(1, ...layout.chips.map((chip) => sizeOf(chip.node)));
+  const chipH = (node: RepositoryNode) =>
+    CHIP_H_MIN + (CHIP_H_MAX - CHIP_H_MIN) * Math.sqrt(sizeOf(node) / maxSize);
+  // Heights vary, so chips stack per column instead of sitting on a row grid.
+  const chipTop = new Map<string, number>();
+  let bottom = HEADER_Y;
+  {
+    const nextY = Array<number>(layout.columnCount).fill(HEADER_Y);
+    for (const chip of layout.chips) {
+      chipTop.set(chip.node.id, nextY[chip.column]);
+      nextY[chip.column] += chipH(chip.node) + ROW_GAP;
+      bottom = Math.max(bottom, nextY[chip.column] - ROW_GAP);
+    }
+  }
+  const height = bottom + MARGIN_BOTTOM;
   const query = searchQuery.trim().toLowerCase();
   const animated = layout.edges.length <= MAX_ANIMATED_EDGES;
 
@@ -130,8 +252,8 @@ function FlowScene({ graph, selectedId, searchQuery, maxDepth, onSelect }: FlowS
   for (const edge of layout.edges) {
     const source = chipById.get(edge.source)!;
     const target = chipById.get(edge.target)!;
-    const sy = chipY(source.row) + CHIP_H / 2;
-    const ty = chipY(target.row) + CHIP_H / 2;
+    const sy = chipTop.get(edge.source)! + chipH(source.node) / 2;
+    const ty = chipTop.get(edge.target)! + chipH(target.node) / 2;
     const cycle = target.column <= source.column;
     let path: string;
     let control: { x: number; y: number };
@@ -204,6 +326,9 @@ function FlowScene({ graph, selectedId, searchQuery, maxDepth, onSelect }: FlowS
 
           {layout.chips.map((chip: FlowChip) => {
             const { node } = chip;
+            const h = chipH(node);
+            const blurb = node.description ?? (node.path !== node.name ? node.path : null);
+            const descLines = blurb ? wrapDescription(blurb, Math.floor((h - 49) / 11)) : [];
             const faded = query !== "" && !matchesQuery(node, query);
             const dimmed = active !== null && !active.chips.has(node.id);
             const classes = [
@@ -217,7 +342,7 @@ function FlowScene({ graph, selectedId, searchQuery, maxDepth, onSelect }: FlowS
               <g
                 key={node.id}
                 className={classes}
-                transform={`translate(${chipX(chip.column)}, ${chipY(chip.row)})`}
+                transform={`translate(${chipX(chip.column)}, ${chipTop.get(node.id)!})`}
                 tabIndex={0}
                 role="button"
                 aria-label={`${node.path}: imports ${chip.fanOut}, imported by ${chip.fanIn}`}
@@ -232,7 +357,7 @@ function FlowScene({ graph, selectedId, searchQuery, maxDepth, onSelect }: FlowS
                 onPointerLeave={hoverCapable ? () => setHoveredId(null) : undefined}
               >
                 <title>{node.description ?? node.path}</title>
-                <rect className="chip-plate" width={CHIP_W} height={CHIP_H} rx={3} />
+                <rect className="chip-plate" width={CHIP_W} height={h} rx={3} />
                 <rect className={`chip-mark chip-${node.kind}`} x={10} y={11} width={7} height={7} />
                 <text className="chip-name" x={24} y={19}>
                   {chipLabel(node.name)}
@@ -244,15 +369,31 @@ function FlowScene({ graph, selectedId, searchQuery, maxDepth, onSelect }: FlowS
                       : ""
                   }`}
                 </text>
+                {descLines.map((line, index) => (
+                  <text key={index} className="chip-desc" x={10} y={52 + index * 11}>
+                    {line}
+                  </text>
+                ))}
               </g>
             );
           })}
         </svg>
       </div>
 
+      {selectedNode ? (
+        <MiniMap
+          graph={graph}
+          node={selectedNode}
+          searchQuery={searchQuery}
+          depth={layout.effectiveDepth}
+          onSelect={onSelect}
+        />
+      ) : null}
+
       <div className="axis-key" aria-hidden="true">
         <span>Left imports right / pulses follow imports</span>
         <span>Line weight / import count</span>
+        <span>{`Chip height / size (${graph.stats.lineCountAvailable ? "lines" : "bytes"})`}</span>
         {Number.isFinite(maxDepth) && layout.effectiveDepth > maxDepth ? (
           <span>Auto detail / depth {layout.effectiveDepth}</span>
         ) : null}

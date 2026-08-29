@@ -1,9 +1,21 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { PanelResizeHandle, usePanelLayout } from "./PanelResizeHandle";
+import KindMark from "./ui/KindMark";
+import Register from "./ui/Register";
+import SectionHeading from "./ui/SectionHeading";
+import Seg from "./ui/Seg";
+import Stat from "./ui/Stat";
 import RepositoryScene, { type RepositorySceneHandle } from "./RepositoryScene";
 import FlowScene from "./FlowScene";
 import { scanGitHubRepository } from "./github";
+import {
+  DEFAULT_INSPECTOR_WIDTH,
+  DEFAULT_RAIL_WIDTH,
+  MIN_INSPECTOR_WIDTH,
+  MIN_RAIL_WIDTH,
+} from "./panelLayout";
 import {
   formatBytes,
   layerForNode,
@@ -14,6 +26,17 @@ import {
   type RepositoryNode,
   type RepositoryNodeKind,
 } from "./model";
+import {
+  SCALE_LADDER,
+  ancestorAtScale,
+  ancestry,
+  nodeGlyph,
+  scaleIndex,
+  scaleOf,
+  surveyOffset,
+  visibleCrumbs,
+  type NodeScale,
+} from "./location";
 import "./App.css";
 
 const LAST_SOURCE_KEY = "codebase-atlas:last-source";
@@ -87,6 +110,116 @@ function childNodes(graph: RepositoryGraph, parentId: string) {
     });
 }
 
+function LocationTrail({
+  trail,
+  onSelect,
+  compact = false,
+}: {
+  trail: RepositoryNode[];
+  onSelect: (id: string) => void;
+  compact?: boolean;
+}) {
+  if (trail.length === 0) return null;
+  const crumbs = compact ? visibleCrumbs(trail) : trail;
+  const currentId = trail[trail.length - 1]?.id;
+  const gapTarget = trail.length > 4 ? trail[trail.length - 3] : null;
+  return (
+    <nav className={`location-trail${compact ? " is-compact" : ""}`} aria-label="Focus path">
+      <ol>
+        {crumbs.map((crumb) => {
+          if (crumb === "gap") {
+            return (
+              <li key="gap">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (gapTarget) onSelect(gapTarget.id);
+                  }}
+                  title={gapTarget?.path}
+                  aria-label="Show omitted ancestor"
+                >
+                  …
+                </button>
+              </li>
+            );
+          }
+          const current = crumb.id === currentId;
+          return (
+            <li key={crumb.id}>
+              {current ? (
+                <span aria-current="location">{crumb.name}</span>
+              ) : (
+                <button type="button" onClick={() => onSelect(crumb.id)} title={crumb.path}>
+                  {crumb.name}
+                </button>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </nav>
+  );
+}
+
+function ScaleLadder({
+  current,
+  trail,
+  onSelect,
+}: {
+  current: NodeScale;
+  trail: RepositoryNode[];
+  onSelect: (id: string) => void;
+}) {
+  const currentIndex = scaleIndex(current);
+  return (
+    <Seg plate className="scale-ladder" role="group" aria-label="Focus scale">
+      {SCALE_LADDER.map((rung) => {
+        const index = scaleIndex(rung.id);
+        const locked = !rung.surveyed;
+        const reached = !locked && index <= currentIndex;
+        const isCurrent = rung.id === current;
+        const target =
+          locked || rung.id === "function" ? null : ancestorAtScale(trail, rung.id);
+        const disabled = locked || !target;
+        return (
+          <button
+            key={rung.id}
+            type="button"
+            className={[
+              reached ? "is-reached" : "",
+              isCurrent ? "is-current" : "",
+              locked ? "is-locked" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+            disabled={disabled}
+            aria-current={isCurrent ? "true" : undefined}
+            aria-label={
+              locked ? "Function scale is not in this survey" : `${rung.label} scale`
+            }
+            title={
+              locked
+                ? "Functions are not in this survey yet"
+                : target
+                  ? target.path
+                  : undefined
+            }
+            onClick={() => {
+              if (target && target.id !== currentId(trail)) onSelect(target.id);
+            }}
+          >
+            {rung.label}
+          </button>
+        );
+      })}
+    </Seg>
+  );
+}
+
+function currentId(trail: RepositoryNode[]) {
+  return trail[trail.length - 1]?.id;
+}
+
 function errorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
@@ -130,6 +263,19 @@ function App() {
   const [railOpen, setRailOpen] = useState(false);
   const [githubDialogOpen, setGitHubDialogOpen] = useState(false);
   const [githubUrl, setGitHubUrl] = useState("");
+  const {
+    shellRef,
+    workspaceRef,
+    widths,
+    layoutMode,
+    railMax,
+    inspectorMax,
+    previewRail,
+    previewInspector,
+    commitRail,
+    commitInspector,
+    style: panelStyle,
+  } = usePanelLayout();
   const initialScanStarted = useRef(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const githubDialogRef = useRef<HTMLDialogElement>(null);
@@ -356,10 +502,10 @@ function App() {
     },
   ];
   const selectedNode = graph?.nodes.find((node) => node.id === selectedId) ?? null;
-  const parentEdge = graph?.edges.find(
-    (edge) => edge.kind === "contains" && edge.target === selectedNode?.id,
-  );
-  const parentNode = graph?.nodes.find((node) => node.id === parentEdge?.source) ?? null;
+  const trail = graph && selectedNode ? ancestry(graph, selectedNode.id) : [];
+  const focusScale = selectedNode ? scaleOf(selectedNode) : null;
+  const surveyDepth = depth >= MAX_MAP_DEPTH ? Number.POSITIVE_INFINITY : depth;
+  const focusOffset = selectedNode ? surveyOffset(selectedNode, surveyDepth) : 0;
   const visibleLayerCount = Object.values(layers).filter(Boolean).length;
   const layerCount = Object.keys(layers).length;
   const importEdgeCount =
@@ -371,7 +517,7 @@ function App() {
   const contained = graph && selectedNode ? childNodes(graph, selectedNode.id) : [];
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" ref={shellRef} style={panelStyle}>
       <a className="skip-link" href="#repository-map">
         Skip to code map
       </a>
@@ -388,19 +534,20 @@ function App() {
         }}
       >
         <form onSubmit={submitGitHub}>
-          <header>
-            <div>
-              <span className="section-index">SOURCE / GITHUB</span>
-              <h2 id="github-dialog-title">Map a public repository</h2>
-            </div>
-            <button
-              type="button"
-              onClick={() => setGitHubDialogOpen(false)}
-              aria-label="Close GitHub URL dialog"
-            >
-              ×
-            </button>
-          </header>
+          <SectionHeading
+            index="SOURCE / GITHUB"
+            title="Map a public repository"
+            titleId="github-dialog-title"
+            action={
+              <button
+                type="button"
+                onClick={() => setGitHubDialogOpen(false)}
+                aria-label="Close GitHub URL dialog"
+              >
+                ×
+              </button>
+            }
+          />
           <p id="github-dialog-description">
             Enter a public GitHub repository URL. Codebase Atlas reads its default branch tree through GitHub’s API.
           </p>
@@ -424,7 +571,7 @@ function App() {
           ) : null}
           <footer>
             <small>Public repositories only · GitHub rate limits unauthenticated requests</small>
-            <button type="submit" disabled={loading}>
+            <button type="submit" className="btn-ink" disabled={loading}>
               {loading ? "Reading tree" : "Map repository"}
             </button>
           </footer>
@@ -433,8 +580,20 @@ function App() {
 
       <header className="instrument-bar">
         <div className="brand-block" aria-label="Codebase Atlas">
-          <span className="brand-index">CA / 01</span>
+          <span className="section-index brand-index">CA / 01</span>
           <strong>CODEBASE ATLAS</strong>
+          <PanelResizeHandle
+            label="Resize modules panel"
+            controlsId="module-rail"
+            edge="end"
+            value={widths.rail}
+            min={MIN_RAIL_WIDTH}
+            max={railMax}
+            defaultValue={DEFAULT_RAIL_WIDTH}
+            tabIndex={-1}
+            onChange={previewRail}
+            onCommit={commitRail}
+          />
         </div>
 
         <button
@@ -448,34 +607,37 @@ function App() {
         </button>
 
         <div className="instrument-readings" aria-label="Repository summary">
-          <div className="instrument-reading repository-reading">
-            <span>Repository</span>
-            <strong title={graph?.root}>{graph?.name ?? "No source"}</strong>
-          </div>
-          <div className="instrument-reading branch-reading">
-            <span>Branch</span>
-            <strong>{graph?.branch ?? "--"}</strong>
-          </div>
-          <div className="instrument-reading metric-reading">
-            <span>Files</span>
-            <strong>{graph ? graph.stats.files.toLocaleString() : "--"}</strong>
-          </div>
-          <div className="instrument-reading metric-reading">
-            <span>Lines</span>
-            <strong>
-              {graph?.stats.lineCountAvailable ? graph.stats.lines.toLocaleString() : "--"}
-            </strong>
-          </div>
-          <div className="instrument-reading metric-reading">
-            <span>Imports</span>
-            <strong>
-              {graph?.stats.importsAvailable ? importEdgeCount.toLocaleString() : "--"}
-            </strong>
-          </div>
-          <div className="instrument-reading metric-reading languages-reading">
-            <span>Languages</span>
-            <strong>{graph ? graph.stats.languages.length : "--"}</strong>
-          </div>
+          <Stat
+            className="instrument-reading repository-reading"
+            label="Repository"
+            value={graph?.name ?? "No source"}
+            title={graph?.root}
+          />
+          <Stat
+            className="instrument-reading branch-reading"
+            label="Branch"
+            value={graph?.branch ?? "--"}
+          />
+          <Stat
+            className="instrument-reading metric-reading"
+            label="Files"
+            value={graph ? graph.stats.files.toLocaleString() : "--"}
+          />
+          <Stat
+            className="instrument-reading metric-reading"
+            label="Lines"
+            value={graph?.stats.lineCountAvailable ? graph.stats.lines.toLocaleString() : "--"}
+          />
+          <Stat
+            className="instrument-reading metric-reading"
+            label="Imports"
+            value={graph?.stats.importsAvailable ? importEdgeCount.toLocaleString() : "--"}
+          />
+          <Stat
+            className="instrument-reading metric-reading languages-reading"
+            label="Languages"
+            value={graph ? graph.stats.languages.length : "--"}
+          />
         </div>
 
         <div className="source-actions">
@@ -535,7 +697,7 @@ function App() {
         </div>
       </header>
 
-      <div className="workspace">
+      <div className="workspace" ref={workspaceRef}>
         <button
           className={`workspace-curtain ${railOpen || inspectorOpen ? "is-active" : ""}`}
           type="button"
@@ -551,15 +713,19 @@ function App() {
           className={`module-rail ${railOpen ? "is-open" : ""}`}
           aria-label="Repository modules"
         >
-          <div className="rail-heading">
-            <div>
-              <span className="section-index">A.01</span>
-              <h2>Modules</h2>
-            </div>
-            <button className="panel-close" type="button" onClick={() => setRailOpen(false)}>
-              Close
-            </button>
-          </div>
+          <SectionHeading
+            index="A.01"
+            title="Modules"
+            action={
+              <button
+                className="panel-close btn-ghost"
+                type="button"
+                onClick={() => setRailOpen(false)}
+              >
+                Close
+              </button>
+            }
+          />
 
           <label className="search-field">
             <span className="visually-hidden">Search repository modules</span>
@@ -606,7 +772,7 @@ function App() {
                           title={node.path}
                           aria-current={selectedNode?.id === node.id ? "true" : undefined}
                         >
-                          <span className={`kind-mark kind-${node.kind}`} aria-hidden="true" />
+                          <KindMark kind={node.kind} />
                           <span className="module-name">{node.name}</span>
                           <span className="module-meta">
                             {node.kind === "directory" || node.kind === "repository"
@@ -629,18 +795,40 @@ function App() {
               <p className="rail-empty">Load a local directory or GitHub repository to populate the module index.</p>
             ) : null}
           </div>
+          {layoutMode !== "narrow" || railOpen ? (
+            <PanelResizeHandle
+              label="Resize modules panel"
+              controlsId="module-rail"
+              edge="end"
+              value={widths.rail}
+              min={MIN_RAIL_WIDTH}
+              max={railMax}
+              defaultValue={DEFAULT_RAIL_WIDTH}
+              onChange={previewRail}
+              onCommit={commitRail}
+            />
+          ) : null}
         </nav>
 
         <main id="repository-map" className="map-panel" tabIndex={-1}>
           <div className="map-header">
-            <div>
+            <div className="location-block">
               <span className="section-index">
-              {view === "map" ? "B.02 / Orthographic projection" : "B.02 / Import flow"}
-            </span>
-              <h1>{graph ? graph.name : "Repository field"}</h1>
+                {view === "map" ? "B.02 / Orthographic" : "B.02 / Import flow"}
+                {focusScale ? ` · ${focusScale}` : ""}
+                {focusOffset ? ` · +${focusOffset}` : ""}
+              </span>
+              <h1 className="visually-hidden">
+                {selectedNode?.path ?? graph?.name ?? "Repository field"}
+              </h1>
+              {trail.length ? (
+                <LocationTrail trail={trail} onSelect={selectNode} compact />
+              ) : (
+                <p className="location-fallback">{graph ? graph.name : "Repository field"}</p>
+              )}
             </div>
             <button
-              className="mobile-inspector-button"
+              className="mobile-inspector-button btn-ghost"
               type="button"
               onClick={() => setInspectorOpen(true)}
               disabled={!selectedNode}
@@ -655,7 +843,7 @@ function App() {
             <>
               <div className="scene-toolbar" aria-label="Map controls">
                 <div className="toolbar-cluster">
-                  <div className="view-controls" role="group" aria-label="Visualization mode">
+                  <Seg plate className="view-controls" role="group" aria-label="Visualization mode">
                     {(["map", "flow"] as const).map((mode) => (
                       <button
                         key={mode}
@@ -666,9 +854,14 @@ function App() {
                         {mode}
                       </button>
                     ))}
-                  </div>
+                  </Seg>
                   {view === "map" ? (
-                    <div className="layer-controls" aria-label="Visible map layers">
+                    <Seg
+                      plate
+                      variant="strike"
+                      className="layer-controls"
+                      aria-label="Visible map layers"
+                    >
                       {(Object.keys(layers) as LayerName[]).map((layer) => (
                         <button
                           key={layer}
@@ -680,25 +873,33 @@ function App() {
                           {layer}
                         </button>
                       ))}
-                    </div>
+                    </Seg>
                   ) : null}
                 </div>
-                <label className="depth-controls" title="How many directory levels the map renders; imports aggregate to the visible level. Select a district to look inside without raising this.">
-                  <span>
-                    Depth {depth >= MAX_MAP_DEPTH ? "all" : depth}
-                  </span>
-                  <input
-                    type="range"
-                    min={1}
-                    max={MAX_MAP_DEPTH}
-                    step={1}
-                    value={depth}
-                    onChange={(event) => setDepth(Number(event.currentTarget.value))}
-                    aria-label="Map granularity: directory levels rendered"
-                  />
-                </label>
+                <div className="altitude-controls">
+                  <label
+                    className="depth-controls plate"
+                    title="Default grain of the whole field. Opening a district looks deeper locally without moving this."
+                  >
+                    <span>
+                      Survey {depth >= MAX_MAP_DEPTH ? "all" : depth}
+                    </span>
+                    <input
+                      type="range"
+                      min={1}
+                      max={MAX_MAP_DEPTH}
+                      step={1}
+                      value={depth}
+                      onChange={(event) => setDepth(Number(event.currentTarget.value))}
+                      aria-label="Survey depth: directory levels rendered across the map"
+                    />
+                  </label>
+                  {focusScale ? (
+                    <ScaleLadder current={focusScale} trail={trail} onSelect={selectNode} />
+                  ) : null}
+                </div>
                 {view === "map" ? (
-                  <div className="camera-controls">
+                  <Seg plate className="camera-controls">
                     <button
                       type="button"
                       onClick={() => sceneRef.current?.zoomOut()}
@@ -723,7 +924,7 @@ function App() {
                     >
                       +
                     </button>
-                  </div>
+                  </Seg>
                 ) : null}
               </div>
               {view === "map" ? (
@@ -768,17 +969,24 @@ function App() {
               </p>
               <div className="empty-actions">
                 <button
+                  className="btn-ink"
                   type="button"
                   onClick={() => mapFileInputRef.current?.click()}
                   disabled={loading}
                 >
                   Map file
                 </button>
-                <button type="button" onClick={openGitHubDialog} disabled={loading}>
+                <button
+                  className="btn-ghost"
+                  type="button"
+                  onClick={openGitHubDialog}
+                  disabled={loading}
+                >
                   GitHub repository
                 </button>
                 {isDesktopRuntime ? (
                   <button
+                    className="btn-ghost"
                     type="button"
                     onClick={() => void chooseRepository()}
                     disabled={loading}
@@ -821,17 +1029,21 @@ function App() {
           className={`node-inspector ${inspectorOpen ? "is-open" : ""}`}
           aria-label="Module inspector"
         >
-          <div className="inspector-heading">
-            <div>
-              <span className="section-index">C.03</span>
-              <h2>Inspector</h2>
-            </div>
-            <button className="panel-close" type="button" onClick={() => setInspectorOpen(false)}>
-              Close
-            </button>
-          </div>
+          <SectionHeading
+            index="C.03"
+            title="Inspector"
+            action={
+              <button
+                className="panel-close btn-ghost"
+                type="button"
+                onClick={() => setInspectorOpen(false)}
+              >
+                Close
+              </button>
+            }
+          />
 
-          <div className="inspector-tabs" role="tablist" aria-label="Inspector views">
+          <Seg className="inspector-tabs" role="tablist" aria-label="Inspector views">
             <button
               id="overview-tab"
               type="button"
@@ -852,19 +1064,22 @@ function App() {
             >
               Details
             </button>
-          </div>
+          </Seg>
 
           {selectedNode ? (
             <div className="inspector-content">
               <div className="node-identity">
                 <span className={`node-glyph kind-${selectedNode.kind}`} aria-hidden="true">
-                  {selectedNode.kind === "repository" ? "R" : selectedNode.kind.slice(0, 1).toUpperCase()}
+                  {nodeGlyph(selectedNode)}
                 </span>
                 <div>
-                  <span>{selectedNode.kind}</span>
+                  <span>
+                    {focusScale} · {selectedNode.kind}
+                  </span>
                   <h3>{selectedNode.name}</h3>
                 </div>
               </div>
+              <LocationTrail trail={trail} onSelect={selectNode} />
 
               {inspectorTab === "overview" ? (
                 <div
@@ -880,24 +1095,11 @@ function App() {
                     <h4>Placement</h4>
                     <dl className="detail-list">
                       <div>
-                        <dt>Parent</dt>
+                        <dt>Scale</dt>
                         <dd>
-                          {parentNode ? (
-                            <button
-                              type="button"
-                              onClick={() => selectNode(parentNode.id)}
-                              title={parentNode.path}
-                            >
-                              {parentNode.name}
-                            </button>
-                          ) : (
-                            "Coordinate origin"
-                          )}
+                          {focusScale}
+                          {focusOffset ? ` · +${focusOffset} below survey` : " · at survey"}
                         </dd>
-                      </div>
-                      <div>
-                        <dt>Depth</dt>
-                        <dd>{selectedNode.depth}</dd>
                       </div>
                       <div>
                         <dt>Layer</dt>
@@ -908,20 +1110,16 @@ function App() {
                   <section>
                     <h4>Signal</h4>
                     <div className="signal-grid">
-                      <div>
-                        <strong>
-                          {graph?.stats.lineCountAvailable ? selectedNode.lines.toLocaleString() : "--"}
-                        </strong>
-                        <span>Lines</span>
-                      </div>
-                      <div>
-                        <strong>{formatBytes(selectedNode.sizeBytes)}</strong>
-                        <span>Size</span>
-                      </div>
-                      <div>
-                        <strong>{selectedNode.childCount.toLocaleString()}</strong>
-                        <span>Children</span>
-                      </div>
+                      <Stat
+                        label="Lines"
+                        value={
+                          graph?.stats.lineCountAvailable
+                            ? selectedNode.lines.toLocaleString()
+                            : "--"
+                        }
+                      />
+                      <Stat label="Size" value={formatBytes(selectedNode.sizeBytes)} />
+                      <Stat label="Children" value={selectedNode.childCount.toLocaleString()} />
                     </div>
                   </section>
                   {contained.length ? (
@@ -929,22 +1127,21 @@ function App() {
                       <h4>
                         Contains / {contained.length}
                       </h4>
-                      <ol className="flow-register">
-                        {contained.map((child) => (
-                          <li key={child.id}>
-                            <button type="button" onClick={() => selectNode(child.id)} title={child.path}>
-                              <span>{child.name}</span>
-                              <b>
-                                {child.kind === "directory" || child.kind === "repository"
-                                  ? child.childCount.toLocaleString()
-                                  : graph?.stats.lineCountAvailable
-                                    ? child.lines.toLocaleString()
-                                    : formatBytes(child.sizeBytes)}
-                              </b>
-                            </button>
-                          </li>
-                        ))}
-                      </ol>
+                      <Register
+                        onSelect={selectNode}
+                        items={contained.map((child) => ({
+                          id: child.id,
+                          label: child.name,
+                          kind: child.kind,
+                          title: child.path,
+                          value:
+                            child.kind === "directory" || child.kind === "repository"
+                              ? child.childCount.toLocaleString()
+                              : graph?.stats.lineCountAvailable
+                                ? child.lines.toLocaleString()
+                                : formatBytes(child.sizeBytes),
+                        }))}
+                      />
                     </section>
                   ) : null}
                   {flows
@@ -965,16 +1162,15 @@ function App() {
                             <h4>
                               {group.label} / {group.total}
                             </h4>
-                            <ol className="flow-register">
-                              {group.entries.map(([id, count]) => (
-                                <li key={id}>
-                                  <button type="button" onClick={() => selectNode(id)} title={id}>
-                                    <span>{id.split("/").pop()}</span>
-                                    <b>{count}</b>
-                                  </button>
-                                </li>
-                              ))}
-                            </ol>
+                            <Register
+                              onSelect={selectNode}
+                              items={group.entries.map(([id, count]) => ({
+                                id,
+                                label: id.split("/").pop() ?? id,
+                                title: id,
+                                value: count,
+                              }))}
+                            />
                           </section>
                         ) : null,
                       )
@@ -991,18 +1187,15 @@ function App() {
                   {selectedNode.kind === "repository" && graph?.stats.languages.length ? (
                     <section>
                       <h4>Language register</h4>
-                      <ol className="language-register">
-                        {graph.stats.languages.slice(0, 8).map((language) => (
-                          <li key={language.name}>
-                            <span>{language.name}</span>
-                            <b>
-                              {graph.stats.lineCountAvailable
-                                ? language.lines.toLocaleString()
-                                : `${language.files.toLocaleString()} files`}
-                            </b>
-                          </li>
-                        ))}
-                      </ol>
+                      <Register
+                        items={graph.stats.languages.slice(0, 8).map((language) => ({
+                          id: language.name,
+                          label: language.name,
+                          value: graph.stats.lineCountAvailable
+                            ? language.lines.toLocaleString()
+                            : `${language.files.toLocaleString()} files`,
+                        }))}
+                      />
                     </section>
                   ) : null}
                 </div>
@@ -1062,6 +1255,19 @@ function App() {
               ))}
             </section>
           ) : null}
+          {layoutMode === "wide" || inspectorOpen ? (
+            <PanelResizeHandle
+              label="Resize inspector panel"
+              controlsId="node-inspector"
+              edge="start"
+              value={widths.inspector}
+              min={MIN_INSPECTOR_WIDTH}
+              max={inspectorMax}
+              defaultValue={DEFAULT_INSPECTOR_WIDTH}
+              onChange={previewInspector}
+              onCommit={commitInspector}
+            />
+          ) : null}
         </aside>
       </div>
 
@@ -1073,7 +1279,7 @@ function App() {
         <p>
           {view === "map" ? (
             <>
-              Drag to orbit · click a district to look inside · scroll to zoom · <kbd>G</kbd> GitHub · <kbd>/</kbd> search · <kbd>0</kbd> reset
+              Drag to orbit · click a district to look inside · trail and scale show how deep you are · <kbd>G</kbd> GitHub · <kbd>/</kbd> search · <kbd>0</kbd> reset
             </>
           ) : (
             <>

@@ -52,6 +52,16 @@ Both source paths produce the same serializable `RepositoryGraph`. The native la
 - **Honest metrics:** local scans count lines from bounded text files. GitHub Trees provide file sizes but not contents, so GitHub maps encode size and mark line counts and import edges unavailable.
 - **Bounded work:** scans stop at 4,000 nodes, the scene renders at most 700 nodes, and local line counting skips files larger than 2 MiB. Full scan statistics and the searchable index remain available when rendering is capped.
 - **Event-driven rendering:** the scene redraws for camera or state changes instead of running a permanent animation loop.
+- **In-repo design system:** the technical-manual olive/paper look lives in `src/ui/` as three layers — `tokens.css` (every color, surface, and type size as CSS custom properties, including the kind palette and the 3D map palette), `ui.css` plus small React primitives (`SectionHeading`, `Seg`, `Stat`, `Register`, `KindMark`) for markup patterns used across features, and `theme.ts`, which reads the tokens off the document so the Three.js scene and canvas labels follow the same palette. Restyling means editing tokens, not chasing literals; an external component library was rejected because the aesthetic is bespoke and the primitive count is small.
+
+```mermaid
+flowchart TD
+  T[ui/tokens.css<br/>palette · type · surfaces] --> U[ui/ui.css + primitives<br/>SectionHeading · Seg · Stat · Register · KindMark]
+  T --> B[ui/theme.ts<br/>CSS-variable bridge]
+  U --> A[App.tsx · App.css<br/>shell and features]
+  B --> S[RepositoryScene<br/>Three.js map]
+  T --> F[FlowScene SVG<br/>styled via classes]
+```
 
 ## Interaction
 
@@ -61,10 +71,21 @@ Both source paths produce the same serializable `RepositoryGraph`. The native la
 - A map placed at `public/maps/default.atlas.json` is bundled into the build and loads automatically when no other source is saved — generate one headlessly with `cargo run --manifest-path src-tauri/Cargo.toml --bin scan -- <repository> public/maps/default.atlas.json`. Bundled maps are snapshots (rebuild to refresh) and stay out of git.
 - Drag to orbit, secondary-drag to pan, and scroll to zoom.
 - Select a module in the map or left index to inspect it. The inspector shows its codebase-index summary when one exists, lists the modules it contains, and lists what it imports and what imports it; selecting a node highlights its flow arcs in the map.
-- Click a district on the map to open it in place — its children appear inside its footprint without moving the depth slider. The rest of the map stays at the current depth. Click a child to keep inspecting, or the parent name in the inspector to step back out.
+- Click a district on the map to open it in place — its children appear inside its footprint without moving the survey slider. Large districts also unpack on their own: a roomy tile shows its nested modules as a treemap instead of a title. The rest of the map stays at the survey grain. The header trail is the path you opened; the scale ladder names the grain (field, district, folder, file). Function is the next rung and is not in this survey yet. Click a trail crumb or an earlier scale rung to step back out.
+
+```mermaid
+flowchart LR
+  Survey[Survey slider] --> Field[Whole-map grain]
+  Focus[Click a district] --> Peek[Local children]
+  Trail[Location trail] --> Path[Where you are]
+  Scale[Scale ladder] --> Grain[Field to file]
+  Peek --> Trail
+  Peek --> Scale
+```
 - Toggle structure, source, config, documentation, and import layers independently.
 - Switch between **map** and **flow** above the scene. Flow lays the same modules out by import direction — animated pulses run along each edge from importer to imported, line weight encodes import count, chips carry line counts — and selecting a chip (click or tap) dims everything except its transitive upstream and downstream. Flow needs import edges, so it asks for a local scan or an exported map when the source is GitHub.
-- Drag the depth slider to set how many directory levels both views render (default 2; the top stop shows all). Import edges aggregate to the visible level, so a coarse depth shows package-to-package flow.
+- Drag the survey slider to set how many directory levels both views render by default (default 2; the top stop shows all). Import edges aggregate to the visible level, so a coarse survey shows package-to-package flow. Opening a district does not move the slider.
+- Drag the module or inspector dividers to resize the side panels. Double-click a divider to restore its default width. The chosen widths persist for the next launch.
 - Press `G` to load GitHub, `/` to search, `0` to reset the camera, and `+` or `-` to zoom.
 - The last successful local or GitHub source is rescanned at the next launch.
 
@@ -93,6 +114,9 @@ npm run tauri build -- --debug --no-bundle
 ```text
 src/
   App.tsx                 application state and accessible shell
+  ui/                     design system: tokens.css, ui.css, theme.ts, primitives
+  PanelResizeHandle.tsx   draggable panel dividers
+  panelLayout.ts          side-panel width clamping and persistence
   RepositoryScene.tsx     Three.js lifecycle and interaction
   repositoryLayout.ts     deterministic module placement
   github-url.ts           GitHub URL validation
