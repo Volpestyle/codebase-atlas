@@ -2,6 +2,7 @@ import {
   forwardRef,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -14,7 +15,12 @@ import type {
   RepositoryNodeKind,
 } from "./model";
 import { layerForNode } from "./model";
-import { buildRepositoryLayout, MAX_RENDERED_NODES } from "./repositoryLayout";
+import {
+  buildRepositoryLayout,
+  revealedForSelection,
+  type LayoutModule,
+  type RepositoryLayout,
+} from "./repositoryLayout";
 
 export interface RepositorySceneHandle {
   resetCamera: () => void;
@@ -27,6 +33,7 @@ interface RepositorySceneProps {
   selectedId: string | null;
   searchQuery: string;
   layers: LayerVisibility;
+  maxDepth: number;
   onSelect: (id: string | null) => void;
 }
 
@@ -37,6 +44,30 @@ interface SceneVisual {
   fill: THREE.MeshStandardMaterial;
   wire: THREE.LineBasicMaterial;
   label: THREE.SpriteMaterial | null;
+  baseColor: number;
+}
+
+interface ImportVisual {
+  source: string;
+  target: string;
+  line: THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial>;
+  baseOpacity: number;
+}
+
+interface SceneEngine {
+  scene: THREE.Scene;
+  camera: THREE.OrthographicCamera;
+  renderer: THREE.WebGLRenderer;
+  controls: OrbitControls;
+  host: HTMLDivElement;
+  modulesGroup: THREE.Group;
+  importsGroup: THREE.Group;
+  visuals: Map<string, SceneVisual>;
+  hitTargets: THREE.Mesh[];
+  importVisuals: ImportVisual[];
+  hoveredId: string | null;
+  render: () => void;
+  updateVisuals: () => void;
 }
 
 const moduleColors: Record<RepositoryNodeKind, number> = {
@@ -76,9 +107,138 @@ function createLabel(text: string) {
   return { sprite, material };
 }
 
+function disposeObject(object: THREE.Object3D) {
+  object.traverse((child) => {
+    const renderable = child as THREE.Object3D & {
+      geometry?: THREE.BufferGeometry;
+      material?: THREE.Material | THREE.Material[];
+    };
+    renderable.geometry?.dispose();
+    const materials = Array.isArray(renderable.material)
+      ? renderable.material
+      : [renderable.material];
+    for (const material of materials) {
+      if (material instanceof THREE.SpriteMaterial) material.map?.dispose();
+      material?.dispose();
+    }
+  });
+}
+
+function clearGroup(group: THREE.Group) {
+  const children = [...group.children];
+  for (const child of children) {
+    group.remove(child);
+    disposeObject(child);
+  }
+}
+
+function populateLayout(engine: SceneEngine, layout: RepositoryLayout) {
+  clearGroup(engine.modulesGroup);
+  clearGroup(engine.importsGroup);
+  engine.visuals.clear();
+  engine.hitTargets.length = 0;
+  engine.importVisuals.length = 0;
+  engine.hoveredId = null;
+
+  const modulesById = new Map(layout.modules.map((module) => [module.node.id, module]));
+
+  for (const module of layout.modules) {
+    const visual = createModuleVisual(module);
+    engine.modulesGroup.add(visual.group);
+    engine.hitTargets.push(visual.mesh);
+    engine.visuals.set(module.node.id, visual);
+  }
+
+  const maxImportWeight = Math.max(1, ...layout.imports.map((flow) => flow.weight));
+  const importSourceColor = new THREE.Color(0x8c8258);
+  const importTargetColor = new THREE.Color(0x7c2d12);
+  for (const flow of layout.imports) {
+    const source = modulesById.get(flow.source);
+    const target = modulesById.get(flow.target);
+    if (!source || !target) continue;
+
+    const from = new THREE.Vector3(source.x, source.y + source.height + 0.1, source.z);
+    const to = new THREE.Vector3(target.x, target.y + target.height + 0.1, target.z);
+    const mid = from.clone().add(to).multiplyScalar(0.5);
+    mid.y += 1.1 + from.distanceTo(to) * 0.16;
+    const points = new THREE.QuadraticBezierCurve3(from, mid, to).getPoints(24);
+    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+    const colors = new Float32Array(points.length * 3);
+    for (let index = 0; index < points.length; index += 1) {
+      const color = importSourceColor
+        .clone()
+        .lerp(importTargetColor, index / (points.length - 1));
+      colors.set([color.r, color.g, color.b], index * 3);
+    }
+    geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+
+    const baseOpacity = 0.34 + 0.5 * (flow.weight / maxImportWeight);
+    const material = new THREE.LineBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: baseOpacity,
+    });
+    const line = new THREE.Line(geometry, material);
+    line.renderOrder = 1;
+    engine.importsGroup.add(line);
+    engine.importVisuals.push({ source: flow.source, target: flow.target, line, baseOpacity });
+  }
+}
+
+function createModuleVisual(module: LayoutModule): SceneVisual {
+  const geometry = new THREE.BoxGeometry(module.width, module.height, module.depth);
+  const baseColor =
+    module.node.kind === "directory" || module.node.kind === "repository"
+      ? module.node.depth % 2 === 0
+        ? moduleColors[module.node.kind]
+        : 0xa29a66
+      : moduleColors[module.node.kind];
+  const fill = new THREE.MeshStandardMaterial({
+    color: baseColor,
+    roughness: 1,
+    metalness: 0,
+    transparent: true,
+  });
+  const mesh = new THREE.Mesh(geometry, fill);
+  mesh.position.y = module.height / 2;
+  mesh.userData.nodeId = module.node.id;
+
+  const wire = new THREE.LineBasicMaterial({
+    color: 0x292a20,
+    transparent: true,
+    opacity: 0.8,
+  });
+  const outline = new THREE.LineSegments(new THREE.EdgesGeometry(geometry), wire);
+  outline.position.copy(mesh.position);
+
+  const group = new THREE.Group();
+  group.position.set(module.x, module.y, module.z);
+  group.add(mesh, outline);
+
+  let label = null;
+  if (module.node.kind === "repository" || module.node.kind === "directory") {
+    label = createLabel(module.node.name);
+    if (label) {
+      label.sprite.position.set(0, module.height + 0.62, 0);
+      group.add(label.sprite);
+    }
+  }
+
+  return {
+    node: module.node,
+    group,
+    mesh,
+    fill,
+    wire,
+    label: label?.material ?? null,
+    baseColor,
+  };
+}
+
 const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
-  function RepositoryScene({ graph, selectedId, searchQuery, layers, onSelect }, ref) {
+  function RepositoryScene({ graph, selectedId, searchQuery, layers, maxDepth, onSelect }, ref) {
     const mountRef = useRef<HTMLDivElement>(null);
+    const engineRef = useRef<SceneEngine | null>(null);
     const sceneControlsRef = useRef<RepositorySceneHandle | null>(null);
     const syncVisualsRef = useRef<(() => void) | null>(null);
     const selectedIdRef = useRef(selectedId);
@@ -87,6 +247,18 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
     const onSelectRef = useRef(onSelect);
     const [hoveredNode, setHoveredNode] = useState<RepositoryNode | null>(null);
     const [sceneError, setSceneError] = useState<string | null>(null);
+
+    const revealedKey = useMemo(
+      () => [...revealedForSelection(graph, selectedId, maxDepth)].sort().join("\0"),
+      [graph, selectedId, maxDepth],
+    );
+    const layout = useMemo(
+      () => buildRepositoryLayout(graph, maxDepth, selectedId),
+      // A selection that does not open hidden children must not rebuild the field.
+      [graph, maxDepth, revealedKey],
+    );
+    const layoutRef = useRef(layout);
+    layoutRef.current = layout;
 
     useImperativeHandle(
       ref,
@@ -108,7 +280,7 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
       const host: HTMLDivElement = mount;
 
       setSceneError(null);
-      const layout = buildRepositoryLayout(graph);
+      const world = buildRepositoryLayout(graph, maxDepth);
       const scene = new THREE.Scene();
       scene.background = new THREE.Color(0xd7cf9f);
 
@@ -138,15 +310,15 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
       controls.maxZoom = 8;
 
       const cameraPosition = new THREE.Vector3(
-        layout.extent * 1.25,
-        layout.extent * 1.55,
-        layout.extent * 1.25,
+        world.extent * 1.25,
+        world.extent * 1.55,
+        world.extent * 1.25,
       );
       camera.position.copy(cameraPosition);
       controls.target.set(0, 0, 0);
       camera.lookAt(controls.target);
 
-      const gridSize = Math.ceil((layout.extent * 2) / 10) * 10;
+      const gridSize = Math.ceil((world.extent * 2) / 10) * 10;
       const grid = new THREE.GridHelper(
         gridSize,
         Math.max(12, Math.round(gridSize / 4.8)),
@@ -166,108 +338,54 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
       keyLight.position.set(20, 40, 18);
       scene.add(keyLight);
 
-      const visuals = new Map<string, SceneVisual>();
-      const hitTargets: THREE.Mesh[] = [];
-      const modulesById = new Map(layout.modules.map((module) => [module.node.id, module]));
-
-      for (const module of layout.modules) {
-        const geometry = new THREE.BoxGeometry(module.width, module.height, module.depth);
-        const fill = new THREE.MeshStandardMaterial({
-          color: moduleColors[module.node.kind],
-          roughness: 1,
-          metalness: 0,
-          transparent: true,
-        });
-        const mesh = new THREE.Mesh(geometry, fill);
-        mesh.position.y = module.height / 2;
-        mesh.userData.nodeId = module.node.id;
-
-        const wire = new THREE.LineBasicMaterial({
-          color: 0x292a20,
-          transparent: true,
-          opacity: 0.8,
-        });
-        const outline = new THREE.LineSegments(new THREE.EdgesGeometry(geometry), wire);
-        outline.position.copy(mesh.position);
-
-        const group = new THREE.Group();
-        group.position.set(module.x, 0, module.z);
-        group.add(mesh, outline);
-
-        let label = null;
-        if (module.node.kind === "repository" || module.node.kind === "directory") {
-          label = createLabel(module.node.name);
-          if (label) {
-            label.sprite.position.set(0, module.height + 0.62, 0);
-            group.add(label.sprite);
-          }
-        }
-
-        scene.add(group);
-        hitTargets.push(mesh);
-        visuals.set(module.node.id, {
-          node: module.node,
-          group,
-          mesh,
-          fill,
-          wire,
-          label: label?.material ?? null,
-        });
-      }
-
-      const edgeVisuals: {
-        source: string;
-        target: string;
-        line: THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial>;
-      }[] = [];
-      for (const edge of layout.edges) {
-        const source = modulesById.get(edge.source);
-        const target = modulesById.get(edge.target);
-        if (!source || !target) continue;
-
-        const geometry = new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(source.x, source.height + 0.08, source.z),
-          new THREE.Vector3(target.x, target.height + 0.08, target.z),
-        ]);
-        const material = new THREE.LineBasicMaterial({
-          color: 0x5e5d42,
-          transparent: true,
-          opacity: 0.28,
-        });
-        const line = new THREE.Line(geometry, material);
-        line.renderOrder = -1;
-        scene.add(line);
-        edgeVisuals.push({ source: edge.source, target: edge.target, line });
-      }
+      const modulesGroup = new THREE.Group();
+      const importsGroup = new THREE.Group();
+      scene.add(modulesGroup, importsGroup);
 
       const raycaster = new THREE.Raycaster();
       const pointer = new THREE.Vector2();
-      let hoveredId: string | null = null;
       let pointerDown = { x: 0, y: 0 };
+
+      const engine: SceneEngine = {
+        scene,
+        camera,
+        renderer,
+        controls,
+        host,
+        modulesGroup,
+        importsGroup,
+        visuals: new Map(),
+        hitTargets: [],
+        importVisuals: [],
+        hoveredId: null,
+        render: () => {
+          renderer.render(scene, camera);
+        },
+        updateVisuals: () => undefined,
+      };
 
       function render() {
         renderer.render(scene, camera);
       }
 
-      controls.addEventListener("change", render);
-
       function updateVisuals() {
         const query = searchQueryRef.current.trim().toLowerCase();
 
-        for (const [id, visual] of visuals) {
+        for (const [id, visual] of engine.visuals) {
           const visible = layersRef.current[layerForNode(visual.node)];
           const matches =
             !query ||
             visual.node.name.toLowerCase().includes(query) ||
             visual.node.path.toLowerCase().includes(query) ||
-            visual.node.language?.toLowerCase().includes(query);
+            visual.node.language?.toLowerCase().includes(query) ||
+            visual.node.description?.toLowerCase().includes(query);
           const selected = id === selectedIdRef.current;
-          const hovered = id === hoveredId;
+          const hovered = id === engine.hoveredId;
 
           visual.group.visible = visible;
           visual.mesh.visible = visible;
           visual.fill.color.setHex(
-            selected ? 0x292a20 : hovered ? 0x8f854d : matches && query ? 0xb46f3d : moduleColors[visual.node.kind],
+            selected ? 0x292a20 : hovered ? 0x8f854d : matches && query ? 0xb46f3d : visual.baseColor,
           );
           visual.fill.opacity = query && !matches ? 0.18 : 1;
           visual.wire.color.setHex(selected ? 0xf1e8b6 : matches && query ? 0x713618 : 0x292a20);
@@ -275,13 +393,32 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
           if (visual.label) visual.label.opacity = query && !matches ? 0.22 : 1;
         }
 
-        for (const edge of edgeVisuals) {
-          const source = visuals.get(edge.source);
-          const target = visuals.get(edge.target);
-          edge.line.visible = Boolean(source?.group.visible && target?.group.visible);
+        const selected = selectedIdRef.current;
+        const selectionHasFlow =
+          selected !== null &&
+          engine.importVisuals.some((flow) => flow.source === selected || flow.target === selected);
+        for (const flow of engine.importVisuals) {
+          const source = engine.visuals.get(flow.source);
+          const target = engine.visuals.get(flow.target);
+          flow.line.visible =
+            layersRef.current.imports && Boolean(source?.group.visible && target?.group.visible);
+          const touchesSelection =
+            selected !== null && (flow.source === selected || flow.target === selected);
+          flow.line.material.opacity = touchesSelection
+            ? 1
+            : selectionHasFlow
+              ? flow.baseOpacity * 0.45
+              : flow.baseOpacity;
         }
         render();
       }
+
+      engine.render = render;
+      engine.updateVisuals = updateVisuals;
+      engineRef.current = engine;
+      syncVisualsRef.current = updateVisuals;
+
+      controls.addEventListener("change", render);
 
       function pointFromEvent(event: PointerEvent) {
         const rect = renderer.domElement.getBoundingClientRect();
@@ -289,17 +426,17 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
         pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
         raycaster.setFromCamera(pointer, camera);
         return raycaster
-          .intersectObjects(hitTargets, false)
+          .intersectObjects(engine.hitTargets, false)
           .find((hit) => hit.object.parent?.visible);
       }
 
       function handlePointerMove(event: PointerEvent) {
         const hit = pointFromEvent(event);
         const nextId = hit?.object.userData.nodeId ?? null;
-        if (nextId === hoveredId) return;
-        hoveredId = nextId;
+        if (nextId === engine.hoveredId) return;
+        engine.hoveredId = nextId;
         renderer.domElement.style.cursor = nextId ? "pointer" : "grab";
-        setHoveredNode(nextId ? visuals.get(nextId)?.node ?? null : null);
+        setHoveredNode(nextId ? (engine.visuals.get(nextId)?.node ?? null) : null);
         updateVisuals();
       }
 
@@ -315,7 +452,7 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
       }
 
       function handlePointerLeave() {
-        hoveredId = null;
+        engine.hoveredId = null;
         setHoveredNode(null);
         updateVisuals();
       }
@@ -324,7 +461,7 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
         const width = Math.max(1, host.clientWidth);
         const height = Math.max(1, host.clientHeight);
         const aspect = width / height;
-        const fittedHeight = layout.extent * 2.18 * (aspect < 1 ? 1 / aspect : 1);
+        const fittedHeight = world.extent * 2.18 * (aspect < 1 ? 1 / aspect : 1);
         camera.left = (-fittedHeight * aspect) / 2;
         camera.right = (fittedHeight * aspect) / 2;
         camera.top = fittedHeight / 2;
@@ -352,13 +489,13 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
         zoomIn: () => changeZoom(1.25),
         zoomOut: () => changeZoom(0.8),
       };
-      syncVisualsRef.current = updateVisuals;
 
       renderer.domElement.addEventListener("pointermove", handlePointerMove);
       renderer.domElement.addEventListener("pointerdown", handlePointerDown);
       renderer.domElement.addEventListener("pointerup", handlePointerUp);
       renderer.domElement.addEventListener("pointerleave", handlePointerLeave);
 
+      populateLayout(engine, layoutRef.current);
       const resizeObserver = new ResizeObserver(resize);
       resizeObserver.observe(host);
       resize();
@@ -367,6 +504,7 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
       return () => {
         syncVisualsRef.current = null;
         sceneControlsRef.current = null;
+        engineRef.current = null;
         resizeObserver.disconnect();
         controls.removeEventListener("change", render);
         controls.dispose();
@@ -391,16 +529,31 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
         renderer.dispose();
         renderer.domElement.remove();
       };
-    }, [graph]);
+    }, [graph, maxDepth]);
+
+    useEffect(() => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      populateLayout(engine, layout);
+      setHoveredNode(null);
+      engine.updateVisuals();
+      return () => {
+        const current = engineRef.current;
+        if (!current) return;
+        clearGroup(current.modulesGroup);
+        clearGroup(current.importsGroup);
+        current.visuals.clear();
+        current.hitTargets.length = 0;
+        current.importVisuals.length = 0;
+      };
+    }, [layout]);
 
     useEffect(() => {
       selectedIdRef.current = selectedId;
       searchQueryRef.current = searchQuery;
       layersRef.current = layers;
       syncVisualsRef.current?.();
-    }, [layers.config, layers.docs, layers.source, layers.structure, searchQuery, selectedId]);
-
-    const renderedCount = Math.min(graph.nodes.length, MAX_RENDERED_NODES);
+    }, [layers.config, layers.docs, layers.imports, layers.source, layers.structure, searchQuery, selectedId]);
 
     return (
       <div className="scene-mount" ref={mountRef}>
@@ -411,9 +564,9 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
             <strong>{hoveredNode.name}</strong>
           </div>
         ) : null}
-        {graph.nodes.length > MAX_RENDERED_NODES ? (
+        {layout.modules.length < graph.nodes.length ? (
           <p className="render-cap" title="The complete repository remains available in the module list.">
-            MAP {renderedCount}/{graph.nodes.length}
+            MAP {layout.modules.length}/{graph.nodes.length}
           </p>
         ) : null}
       </div>
