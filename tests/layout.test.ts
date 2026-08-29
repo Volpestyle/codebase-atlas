@@ -232,6 +232,44 @@ test("selecting a depth-limit district reveals its children without raising dept
   assert.ok(!keepIds.has("b/two.ts"));
 });
 
+test("a large district at the depth limit unpacks its children instead of a title block", () => {
+  const graph = graphOf(
+    [
+      node({ id: ".", kind: "repository" }),
+      node({ id: "big", kind: "directory", lines: 80 }),
+      node({ id: "big/one.ts", lines: 30 }),
+      node({ id: "big/two.ts", lines: 20 }),
+      node({ id: "big/three.ts", lines: 20 }),
+      node({ id: "big/four.ts", lines: 10 }),
+      node({ id: "tiny", kind: "directory", lines: 10 }),
+      node({ id: "tiny/only.ts", lines: 10 }),
+    ],
+    [
+      { source: ".", target: "big", kind: "contains" },
+      { source: "big", target: "big/one.ts", kind: "contains" },
+      { source: "big", target: "big/two.ts", kind: "contains" },
+      { source: "big", target: "big/three.ts", kind: "contains" },
+      { source: "big", target: "big/four.ts", kind: "contains" },
+      { source: ".", target: "tiny", kind: "contains" },
+      { source: "tiny", target: "tiny/only.ts", kind: "contains" },
+    ],
+  );
+
+  const layout = buildRepositoryLayout(graph, 1);
+  const ids = new Set(layout.modules.map((module) => module.node.id));
+  const byId = new Map(layout.modules.map((module) => [module.node.id, module]));
+  assert.ok(ids.has("big/one.ts") && ids.has("big/four.ts"), "roomy district shows its files");
+  assert.ok(!ids.has("tiny/only.ts"), "a one-child block stays packed");
+  const parent = byId.get("big")!;
+  const child = byId.get("big/one.ts")!;
+  assert.equal(parent.height < child.height, true, "opened district is a plate, not a tower");
+  assert.ok(
+    Math.abs(child.x - parent.x) <= (parent.width - child.width) / 2 + 1e-6 &&
+      Math.abs(child.z - parent.z) <= (parent.depth - child.depth) / 2 + 1e-6,
+    "unpacked files fill the district",
+  );
+});
+
 test("lifts unrendered file imports to their rendered ancestors with weights", () => {
   // Two packages whose files land beyond the render cap: their file-level
   // imports must merge into one weighted package-level arc.

@@ -36,8 +36,13 @@ const kindOrder: Record<RepositoryNode["kind"], number> = {
   asset: 5,
 };
 
-const PLAT_HEIGHT = 0.14;
-const PADDING_RATIO = 0.045;
+const PLAT_HEIGHT = 0.2;
+const PADDING_RATIO = 0.03;
+// A district at the survey limit still opens when its cell is big enough
+// to hold a nested treemap — the interior is the label.
+const LOD_MIN_SIDE = 5;
+const MIN_LOD_CHILDREN = 3;
+const LEAF_FILL = 0.92;
 
 interface Rect {
   x0: number;
@@ -131,11 +136,13 @@ function squarify(items: { id: string; area: number }[], rect: Rect): Map<string
 }
 
 function inset(rect: Rect): Rect {
-  const pad = Math.min(
-    Math.min(rect.x1 - rect.x0, rect.z1 - rect.z0) * PADDING_RATIO + 0.06,
-    0.6,
-  );
+  const short = Math.min(rect.x1 - rect.x0, rect.z1 - rect.z0);
+  const pad = Math.min(short * PADDING_RATIO + 0.045, 0.38);
   return { x0: rect.x0 + pad, z0: rect.z0 + pad, x1: rect.x1 - pad, z1: rect.z1 - pad };
+}
+
+function minSide(rect: Rect) {
+  return Math.min(rect.x1 - rect.x0, rect.z1 - rect.z0);
 }
 
 function compareNodes(left: RepositoryNode, right: RepositoryNode) {
@@ -200,7 +207,7 @@ export function buildRepositoryLayout(
   selectedId: string | null = null,
 ): RepositoryLayout {
   const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
-  const { parentOf } = containmentMaps(graph);
+  const { parentOf, childrenOf: allChildren } = containmentMaps(graph);
   const extraIds = revealedForSelection(graph, selectedId, maxDepth);
 
   const pinned = new Set<string>();
@@ -240,17 +247,44 @@ export function buildRepositoryLayout(
   const ordered = [...base, ...chainNodes, ...peekChildren];
   const renderedIds = new Set(ordered.map((node) => node.id));
   const placed = new Map(ordered.map((node) => [node.id, node]));
+  let remaining = Math.max(0, MAX_RENDERED_NODES - ordered.length);
 
-  const childrenOf = new Map<string, string[]>();
-  for (const edge of graph.edges) {
-    if (edge.kind !== "contains") continue;
-    if (!renderedIds.has(edge.source) || !renderedIds.has(edge.target)) continue;
-    const siblings = childrenOf.get(edge.source);
-    if (siblings) siblings.push(edge.target);
-    else childrenOf.set(edge.source, [edge.target]);
-  }
   const weights = buildWeights(graph, parentOf);
   const weightOf = (id: string) => Math.max(1, weights.get(id) ?? 1);
+
+  function adopt(id: string): RepositoryNode | null {
+    const already = placed.get(id);
+    if (already) return already;
+    if (remaining <= 0) return null;
+    const node = nodeById.get(id);
+    if (!node) return null;
+    placed.set(id, node);
+    renderedIds.add(id);
+    remaining -= 1;
+    return node;
+  }
+
+  function shouldOpen(id: string, rect: Rect) {
+    const raw = allChildren.get(id) ?? [];
+    if (raw.length === 0) return false;
+    if (raw.some((childId) => extraIds.has(childId))) return true;
+    if (
+      raw.some(
+        (childId) => (nodeById.get(childId)?.depth ?? Number.POSITIVE_INFINITY) <= maxDepth,
+      )
+    ) {
+      return true;
+    }
+    const node = nodeById.get(id);
+    // Only the survey-limit plate unpacks, and only one extra level — so a
+    // large tile shows its districts, not a hairball of every nested file.
+    return (
+      node !== undefined &&
+      node.depth === maxDepth &&
+      minSide(rect) >= LOD_MIN_SIDE &&
+      raw.length >= MIN_LOD_CHILDREN
+    );
+  }
 
   const side = Math.min(110, Math.max(30, Math.sqrt(base.length) * 6));
   const modules: LayoutModule[] = [];
@@ -258,12 +292,36 @@ export function buildRepositoryLayout(
 
   // Districts: each directory's rectangle contains its children, so position
   // itself encodes the hierarchy; files are buildings sized by line count.
+  // Large cells at the survey limit still open — the nested treemap is the
+  // name, so a big empty plate never wears a title.
   function placeChildren(parentId: string, rect: Rect, elevation: number) {
-    const childIds = childrenOf.get(parentId) ?? [];
-    if (childIds.length === 0) return;
+    const raw = allChildren.get(parentId) ?? [];
+    if (raw.length === 0) return;
     const inner = inset(rect);
     const innerArea = Math.max(0, (inner.x1 - inner.x0) * (inner.z1 - inner.z0));
     if (innerArea <= 0) return;
+
+    const parent = nodeById.get(parentId);
+    const lod =
+      parent !== undefined &&
+      parent.depth === maxDepth &&
+      minSide(rect) >= LOD_MIN_SIDE &&
+      raw.length >= MIN_LOD_CHILDREN;
+    const ranked = [...raw].sort(
+      (left, right) => weightOf(right) - weightOf(left) || left.localeCompare(right),
+    );
+    const childIds: string[] = [];
+    for (const id of ranked) {
+      const node = nodeById.get(id);
+      if (!node) continue;
+      const allowed =
+        node.depth <= maxDepth || extraIds.has(id) || extraIds.has(parentId) || lod;
+      if (!allowed) continue;
+      if (!adopt(id)) break;
+      childIds.push(id);
+      if (node.depth > maxDepth && childIds.length >= MAX_PEEK_CHILDREN) break;
+    }
+    if (childIds.length === 0) return;
 
     const childWeights = childIds.map((id) => ({ id, area: weightOf(id) }));
     const totalWeight = childWeights.reduce((sum, item) => sum + item.area, 0);
@@ -277,10 +335,9 @@ export function buildRepositoryLayout(
       const cell = cells.get(id);
       if (!cell) continue;
       const child = placed.get(id)!;
-      const isDistrict = child.kind === "directory" && (childrenOf.get(id)?.length ?? 0) > 0;
       const cellWidth = cell.x1 - cell.x0;
       const cellDepth = cell.z1 - cell.z0;
-      if (isDistrict) {
+      if (child.kind === "directory" && shouldOpen(id, cell)) {
         modules.push({
           node: child,
           x: (cell.x0 + cell.x1) / 2,
@@ -292,15 +349,15 @@ export function buildRepositoryLayout(
         });
         placeChildren(id, cell, elevation + PLAT_HEIGHT);
       } else {
-        // Leaf building: a file, or a directory whose subtree sits beyond the
-        // depth limit rendered as one solid block for its whole subtree.
+        // Leaf building: a file, or a directory whose subtree is too small
+        // or too deep to unpack as a nested treemap.
         modules.push({
           node: child,
           x: (cell.x0 + cell.x1) / 2,
           y: elevation,
           z: (cell.z0 + cell.z1) / 2,
-          width: cellWidth * 0.84,
-          depth: cellDepth * 0.84,
+          width: cellWidth * LEAF_FILL,
+          depth: cellDepth * LEAF_FILL,
           height: buildingHeight(weightOf(id)),
         });
       }
@@ -321,7 +378,7 @@ export function buildRepositoryLayout(
     placeChildren(".", rootRect, PLAT_HEIGHT);
   }
 
-  const extent = Math.max(18, side / 2 + 8);
+  const extent = Math.max(16, side / 2 + 3);
   return { modules, imports: aggregateImports(graph, renderedIds, parentOf), extent };
 }
 
