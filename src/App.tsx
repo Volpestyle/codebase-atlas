@@ -1,11 +1,13 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import RepositoryScene, { type RepositorySceneHandle } from "./RepositoryScene";
+import FlowScene from "./FlowScene";
 import { scanGitHubRepository } from "./github";
 import {
   formatBytes,
   layerForNode,
+  parseRepositoryGraph,
   type LayerName,
   type LayerVisibility,
   type RepositoryGraph,
@@ -16,6 +18,13 @@ import "./App.css";
 
 const LAST_SOURCE_KEY = "codebase-atlas:last-source";
 const isTauriRuntime = "__TAURI_INTERNALS__" in window;
+// Folder pickers and save dialogs exist on desktop only; touch devices load
+// exported map files or GitHub URLs instead.
+const isDesktopRuntime = isTauriRuntime && navigator.maxTouchPoints < 2;
+
+// Granularity slider range; the top stop renders every depth.
+const MAX_MAP_DEPTH = 8;
+const DEFAULT_MAP_DEPTH = 2;
 
 type SavedSource =
   | { kind: "local"; value: string }
@@ -35,7 +44,48 @@ const defaultLayers: LayerVisibility = {
   source: true,
   config: true,
   docs: true,
+  imports: true,
 };
+
+// Import partners of the selected node, including everything beneath it, so a
+// directory shows the aggregate flow of its subtree.
+function flowPartners(graph: RepositoryGraph, selected: RepositoryNode) {
+  const imports = new Map<string, number>();
+  const importers = new Map<string, number>();
+  if (selected.id === ".") return { imports, importers };
+  const prefix = `${selected.id}/`;
+  const inScope = (id: string) => id === selected.id || id.startsWith(prefix);
+  for (const edge of graph.edges) {
+    if (edge.kind !== "imports") continue;
+    const fromSelection = inScope(edge.source);
+    const intoSelection = inScope(edge.target);
+    if (fromSelection && !intoSelection) {
+      imports.set(edge.target, (imports.get(edge.target) ?? 0) + 1);
+    } else if (intoSelection && !fromSelection) {
+      importers.set(edge.source, (importers.get(edge.source) ?? 0) + 1);
+    }
+  }
+  return { imports, importers };
+}
+
+function topFlows(flows: Map<string, number>) {
+  return [...flows]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, 6);
+}
+
+function childNodes(graph: RepositoryGraph, parentId: string) {
+  const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
+  return graph.edges
+    .filter((edge) => edge.kind === "contains" && edge.source === parentId)
+    .map((edge) => nodeById.get(edge.target))
+    .filter((node): node is RepositoryNode => Boolean(node))
+    .sort((left, right) => {
+      const leftRank = left.kind === "directory" || left.kind === "repository" ? 0 : 1;
+      const rightRank = right.kind === "directory" || right.kind === "repository" ? 0 : 1;
+      return leftRank - rightRank || left.name.localeCompare(right.name);
+    });
+}
 
 function errorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
@@ -73,6 +123,8 @@ function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [layers, setLayers] = useState<LayerVisibility>(defaultLayers);
+  const [depth, setDepth] = useState(DEFAULT_MAP_DEPTH);
+  const [view, setView] = useState<"map" | "flow">("map");
   const [inspectorTab, setInspectorTab] = useState<"overview" | "details">("overview");
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
@@ -81,6 +133,7 @@ function App() {
   const initialScanStarted = useRef(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const githubDialogRef = useRef<HTMLDialogElement>(null);
+  const mapFileInputRef = useRef<HTMLInputElement>(null);
   const githubInputRef = useRef<HTMLInputElement>(null);
   const sceneRef = useRef<RepositorySceneHandle>(null);
 
@@ -127,18 +180,37 @@ function App() {
     }
   }
 
+  // A map bundled into the build at maps/default.atlas.json — how mobile
+  // builds ship a full-fidelity map of a private repository.
+  async function loadBundledMap(): Promise<boolean> {
+    try {
+      const response = await fetch("maps/default.atlas.json");
+      if (!response.ok) return false;
+      showGraph(parseRepositoryGraph(await response.text()));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   useEffect(() => {
     if (initialScanStarted.current) return;
     initialScanStarted.current = true;
-    const savedSource = readSavedSource();
-    if (savedSource?.kind === "github") {
-      setGitHubUrl(savedSource.value);
-      void scanGitHub(savedSource.value);
-    } else if (savedSource?.kind === "local" && isTauriRuntime) {
-      void scanPath(savedSource.value);
-    } else if (isTauriRuntime && import.meta.env.DEV) {
-      void scanPath("..");
-    }
+    void (async () => {
+      // Mobile builds exist to carry their bundled map; it wins at launch.
+      if (!isDesktopRuntime && (await loadBundledMap())) return;
+      const savedSource = readSavedSource();
+      if (savedSource?.kind === "github") {
+        setGitHubUrl(savedSource.value);
+        await scanGitHub(savedSource.value);
+      } else if (savedSource?.kind === "local" && isDesktopRuntime) {
+        await scanPath(savedSource.value);
+      } else if (isDesktopRuntime && import.meta.env.DEV) {
+        await scanPath("..");
+      } else {
+        await loadBundledMap();
+      }
+    })();
   }, []);
 
   useEffect(() => {
@@ -188,8 +260,39 @@ function App() {
     return () => window.removeEventListener("keydown", handleKeyboard);
   }, []);
 
+  function openMapFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) return;
+    setError(null);
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        showGraph(parseRepositoryGraph(String(reader.result)));
+      } catch (parseError) {
+        setError(errorMessage(parseError));
+      }
+    };
+    reader.onerror = () => setError("Could not read the selected map file.");
+    reader.readAsText(file);
+  }
+
+  async function exportMap() {
+    if (!graph || !isDesktopRuntime) return;
+    setError(null);
+    try {
+      const path = await save({
+        defaultPath: `${graph.name}.atlas.json`,
+        filters: [{ name: "Codebase Atlas map", extensions: ["json"] }],
+      });
+      if (path) await invoke("save_map", { path, contents: JSON.stringify(graph) });
+    } catch (saveError) {
+      setError(errorMessage(saveError));
+    }
+  }
+
   async function chooseRepository() {
-    if (!isTauriRuntime) return;
+    if (!isDesktopRuntime) return;
     setError(null);
     try {
       const selected = await open({ directory: true, multiple: false });
@@ -227,7 +330,8 @@ function App() {
         !normalizedSearch ||
         node.name.toLowerCase().includes(normalizedSearch) ||
         node.path.toLowerCase().includes(normalizedSearch) ||
-        node.language?.toLowerCase().includes(normalizedSearch),
+        node.language?.toLowerCase().includes(normalizedSearch) ||
+        node.description?.toLowerCase().includes(normalizedSearch),
     ) ?? [];
   const moduleGroups: { key: LayerName; label: string; nodes: RepositoryNode[] }[] = [
     {
@@ -252,9 +356,19 @@ function App() {
     },
   ];
   const selectedNode = graph?.nodes.find((node) => node.id === selectedId) ?? null;
-  const parentEdge = graph?.edges.find((edge) => edge.target === selectedNode?.id);
+  const parentEdge = graph?.edges.find(
+    (edge) => edge.kind === "contains" && edge.target === selectedNode?.id,
+  );
   const parentNode = graph?.nodes.find((node) => node.id === parentEdge?.source) ?? null;
   const visibleLayerCount = Object.values(layers).filter(Boolean).length;
+  const layerCount = Object.keys(layers).length;
+  const importEdgeCount =
+    graph?.edges.reduce((count, edge) => count + (edge.kind === "imports" ? 1 : 0), 0) ?? 0;
+  const flows =
+    graph && selectedNode && graph.stats.importsAvailable
+      ? flowPartners(graph, selectedNode)
+      : null;
+  const contained = graph && selectedNode ? childNodes(graph, selectedNode.id) : [];
 
   return (
     <div className="app-shell">
@@ -352,6 +466,12 @@ function App() {
               {graph?.stats.lineCountAvailable ? graph.stats.lines.toLocaleString() : "--"}
             </strong>
           </div>
+          <div className="instrument-reading metric-reading">
+            <span>Imports</span>
+            <strong>
+              {graph?.stats.importsAvailable ? importEdgeCount.toLocaleString() : "--"}
+            </strong>
+          </div>
           <div className="instrument-reading metric-reading languages-reading">
             <span>Languages</span>
             <strong>{graph ? graph.stats.languages.length : "--"}</strong>
@@ -359,6 +479,35 @@ function App() {
         </div>
 
         <div className="source-actions">
+          <input
+            ref={mapFileInputRef}
+            type="file"
+            accept="application/json,.json"
+            hidden
+            onChange={openMapFile}
+          />
+          <button
+            className="github-button"
+            type="button"
+            onClick={() => mapFileInputRef.current?.click()}
+            disabled={loading}
+            aria-label="Open an exported Codebase Atlas map file"
+          >
+            <span aria-hidden="true">[ ⇣ ]</span>
+            <b>Open map</b>
+          </button>
+          {isDesktopRuntime ? (
+            <button
+              className="github-button"
+              type="button"
+              onClick={() => void exportMap()}
+              disabled={loading || !graph}
+              aria-label="Save the current map to a file"
+            >
+              <span aria-hidden="true">[ ⇡ ]</span>
+              <b>Save map</b>
+            </button>
+          ) : null}
           <button
             className="github-button"
             type="button"
@@ -370,17 +519,19 @@ function App() {
             <span aria-hidden="true">[ GH ]</span>
             <b>GitHub URL</b>
           </button>
-          <button
-            className="scan-button"
-            type="button"
-            onClick={() => void chooseRepository()}
-            disabled={loading || !isTauriRuntime}
-            aria-label="Choose a repository directory to scan"
-            title={isTauriRuntime ? undefined : "Local directory scanning is available in the desktop app"}
-          >
-            <span aria-hidden="true">[ + ]</span>
-            <b>{loading ? "Scanning" : "Scan directory"}</b>
-          </button>
+          {isDesktopRuntime || !isTauriRuntime ? (
+            <button
+              className="scan-button"
+              type="button"
+              onClick={() => void chooseRepository()}
+              disabled={loading || !isDesktopRuntime}
+              aria-label="Choose a repository directory to scan"
+              title={isDesktopRuntime ? undefined : "Local directory scanning is available in the desktop app"}
+            >
+              <span aria-hidden="true">[ + ]</span>
+              <b>{loading ? "Scanning" : "Scan directory"}</b>
+            </button>
+          ) : null}
         </div>
       </header>
 
@@ -483,7 +634,9 @@ function App() {
         <main id="repository-map" className="map-panel" tabIndex={-1}>
           <div className="map-header">
             <div>
-              <span className="section-index">B.02 / Orthographic projection</span>
+              <span className="section-index">
+              {view === "map" ? "B.02 / Orthographic projection" : "B.02 / Import flow"}
+            </span>
               <h1>{graph ? graph.name : "Repository field"}</h1>
             </div>
             <button
@@ -501,58 +654,103 @@ function App() {
           {graph ? (
             <>
               <div className="scene-toolbar" aria-label="Map controls">
-                <div className="layer-controls" aria-label="Visible map layers">
-                  {(Object.keys(layers) as LayerName[]).map((layer) => (
+                <div className="toolbar-cluster">
+                  <div className="view-controls" role="group" aria-label="Visualization mode">
+                    {(["map", "flow"] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        aria-pressed={view === mode}
+                        onClick={() => setView(mode)}
+                      >
+                        {mode}
+                      </button>
+                    ))}
+                  </div>
+                  {view === "map" ? (
+                    <div className="layer-controls" aria-label="Visible map layers">
+                      {(Object.keys(layers) as LayerName[]).map((layer) => (
+                        <button
+                          key={layer}
+                          type="button"
+                          aria-pressed={layers[layer]}
+                          onClick={() => toggleLayer(layer)}
+                        >
+                          <span aria-hidden="true">{layers[layer] ? "■" : "□"}</span>
+                          {layer}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+                <label className="depth-controls" title="How many directory levels the map renders; imports aggregate to the visible level. Select a district to look inside without raising this.">
+                  <span>
+                    Depth {depth >= MAX_MAP_DEPTH ? "all" : depth}
+                  </span>
+                  <input
+                    type="range"
+                    min={1}
+                    max={MAX_MAP_DEPTH}
+                    step={1}
+                    value={depth}
+                    onChange={(event) => setDepth(Number(event.currentTarget.value))}
+                    aria-label="Map granularity: directory levels rendered"
+                  />
+                </label>
+                {view === "map" ? (
+                  <div className="camera-controls">
                     <button
-                      key={layer}
                       type="button"
-                      aria-pressed={layers[layer]}
-                      onClick={() => toggleLayer(layer)}
+                      onClick={() => sceneRef.current?.zoomOut()}
+                      aria-label="Zoom map out"
+                      aria-keyshortcuts="-"
                     >
-                      <span aria-hidden="true">{layers[layer] ? "■" : "□"}</span>
-                      {layer}
+                      −
                     </button>
-                  ))}
-                </div>
-                <div className="camera-controls">
-                  <button
-                    type="button"
-                    onClick={() => sceneRef.current?.zoomOut()}
-                    aria-label="Zoom map out"
-                    aria-keyshortcuts="-"
-                  >
-                    −
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => sceneRef.current?.resetCamera()}
-                    aria-label="Reset map camera"
-                    aria-keyshortcuts="0"
-                  >
-                    Reset
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => sceneRef.current?.zoomIn()}
-                    aria-label="Zoom map in"
-                    aria-keyshortcuts="+"
-                  >
-                    +
-                  </button>
-                </div>
+                    <button
+                      type="button"
+                      onClick={() => sceneRef.current?.resetCamera()}
+                      aria-label="Reset map camera"
+                      aria-keyshortcuts="0"
+                    >
+                      Reset
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => sceneRef.current?.zoomIn()}
+                      aria-label="Zoom map in"
+                      aria-keyshortcuts="+"
+                    >
+                      +
+                    </button>
+                  </div>
+                ) : null}
               </div>
-              <RepositoryScene
-                ref={sceneRef}
-                graph={graph}
-                selectedId={selectedId}
-                searchQuery={searchQuery}
-                layers={layers}
-                onSelect={selectNode}
-              />
-              <div className="axis-key" aria-hidden="true">
-                <span>Y / {graph.stats.lineCountAvailable ? "lines" : "size"}</span>
-                <span>X-Z / modules</span>
-              </div>
+              {view === "map" ? (
+                <>
+                  <RepositoryScene
+                    ref={sceneRef}
+                    graph={graph}
+                    selectedId={selectedId}
+                    searchQuery={searchQuery}
+                    layers={layers}
+                    maxDepth={depth >= MAX_MAP_DEPTH ? Number.POSITIVE_INFINITY : depth}
+                    onSelect={selectNode}
+                  />
+                  <div className="axis-key" aria-hidden="true">
+                    <span>Y + area / code volume</span>
+                    <span>X-Z / containment</span>
+                  </div>
+                </>
+              ) : (
+                <FlowScene
+                  graph={graph}
+                  selectedId={selectedId}
+                  searchQuery={searchQuery}
+                  maxDepth={depth >= MAX_MAP_DEPTH ? Number.POSITIVE_INFINITY : depth}
+                  onSelect={selectNode}
+                />
+              )}
             </>
           ) : (
             <section className="empty-state" aria-labelledby="empty-title">
@@ -569,19 +767,30 @@ function App() {
                 Select a local directory or enter a public GitHub URL to inspect its structure, languages, and modules.
               </p>
               <div className="empty-actions">
+                <button
+                  type="button"
+                  onClick={() => mapFileInputRef.current?.click()}
+                  disabled={loading}
+                >
+                  Map file
+                </button>
                 <button type="button" onClick={openGitHubDialog} disabled={loading}>
                   GitHub repository
                 </button>
-                <button
-                  type="button"
-                  onClick={() => void chooseRepository()}
-                  disabled={!isTauriRuntime || loading}
-                >
-                  Local directory
-                </button>
+                {isDesktopRuntime ? (
+                  <button
+                    type="button"
+                    onClick={() => void chooseRepository()}
+                    disabled={loading}
+                  >
+                    Local directory
+                  </button>
+                ) : null}
               </div>
-              {!isTauriRuntime ? (
-                <small>Local directory access remains inside the desktop app.</small>
+              {!isDesktopRuntime ? (
+                <small>
+                  Local scanning happens in the desktop app — export a map there and open it here.
+                </small>
               ) : null}
             </section>
           )}
@@ -664,13 +873,27 @@ function App() {
                   aria-labelledby="overview-tab"
                   className="inspector-panel"
                 >
-                  <p className="node-description">{kindDescriptions[selectedNode.kind]}</p>
+                  <p className="node-description">
+                    {selectedNode.description ?? kindDescriptions[selectedNode.kind]}
+                  </p>
                   <section>
                     <h4>Placement</h4>
                     <dl className="detail-list">
                       <div>
                         <dt>Parent</dt>
-                        <dd>{parentNode?.name ?? "Coordinate origin"}</dd>
+                        <dd>
+                          {parentNode ? (
+                            <button
+                              type="button"
+                              onClick={() => selectNode(parentNode.id)}
+                              title={parentNode.path}
+                            >
+                              {parentNode.name}
+                            </button>
+                          ) : (
+                            "Coordinate origin"
+                          )}
+                        </dd>
                       </div>
                       <div>
                         <dt>Depth</dt>
@@ -701,6 +924,70 @@ function App() {
                       </div>
                     </div>
                   </section>
+                  {contained.length ? (
+                    <section>
+                      <h4>
+                        Contains / {contained.length}
+                      </h4>
+                      <ol className="flow-register">
+                        {contained.map((child) => (
+                          <li key={child.id}>
+                            <button type="button" onClick={() => selectNode(child.id)} title={child.path}>
+                              <span>{child.name}</span>
+                              <b>
+                                {child.kind === "directory" || child.kind === "repository"
+                                  ? child.childCount.toLocaleString()
+                                  : graph?.stats.lineCountAvailable
+                                    ? child.lines.toLocaleString()
+                                    : formatBytes(child.sizeBytes)}
+                              </b>
+                            </button>
+                          </li>
+                        ))}
+                      </ol>
+                    </section>
+                  ) : null}
+                  {flows
+                    ? [
+                        {
+                          label: "Imports",
+                          entries: topFlows(flows.imports),
+                          total: flows.imports.size,
+                        },
+                        {
+                          label: "Imported by",
+                          entries: topFlows(flows.importers),
+                          total: flows.importers.size,
+                        },
+                      ].map((group) =>
+                        group.entries.length ? (
+                          <section key={group.label}>
+                            <h4>
+                              {group.label} / {group.total}
+                            </h4>
+                            <ol className="flow-register">
+                              {group.entries.map(([id, count]) => (
+                                <li key={id}>
+                                  <button type="button" onClick={() => selectNode(id)} title={id}>
+                                    <span>{id.split("/").pop()}</span>
+                                    <b>{count}</b>
+                                  </button>
+                                </li>
+                              ))}
+                            </ol>
+                          </section>
+                        ) : null,
+                      )
+                    : null}
+                  {graph && !graph.stats.importsAvailable ? (
+                    <section>
+                      <h4>Flow</h4>
+                      <p className="node-description">
+                        Import edges are unavailable for GitHub sources. Scan a local directory to
+                        map flow.
+                      </p>
+                    </section>
+                  ) : null}
                   {selectedNode.kind === "repository" && graph?.stats.languages.length ? (
                     <section>
                       <h4>Language register</h4>
@@ -784,11 +1071,19 @@ function App() {
           {loading ? "Scanning" : graph ? "Map ready" : "Awaiting source"}
         </div>
         <p>
-          Drag to orbit · secondary drag to pan · scroll to zoom · <kbd>G</kbd> GitHub · <kbd>/</kbd> search · <kbd>0</kbd> reset
+          {view === "map" ? (
+            <>
+              Drag to orbit · click a district to look inside · scroll to zoom · <kbd>G</kbd> GitHub · <kbd>/</kbd> search · <kbd>0</kbd> reset
+            </>
+          ) : (
+            <>
+              Click a module to trace its flow · hover to preview · <kbd>G</kbd> GitHub · <kbd>/</kbd> search
+            </>
+          )}
         </p>
         <div className="status-path" title={graph?.root}>
           {graph
-            ? `${graph.source.toUpperCase()} · ${visibleLayerCount}/4 layers · ${graph.root}`
+            ? `${graph.source.toUpperCase()} · ${visibleLayerCount}/${layerCount} layers · ${graph.root}`
             : "LOCAL OR GITHUB / READ ONLY"}
         </div>
       </footer>

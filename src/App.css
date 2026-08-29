@@ -1041,6 +1041,22 @@ kbd {
   text-align: right;
 }
 
+.detail-list dd button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: right;
+}
+
+.detail-list dd button:hover,
+.detail-list dd button:focus-visible {
+  color: var(--rust);
+  text-decoration: underline;
+}
+
 .full-details > div {
   grid-template-columns: 70px minmax(0, 1fr);
   padding-block: 11px;
@@ -1520,5 +1536,315 @@ kbd {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
+  }
+}
+
+.flow-register {
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--hairline);
+  list-style: none;
+  counter-reset: flow;
+}
+
+.flow-register li {
+  counter-increment: flow;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.flow-register button {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: baseline;
+  width: 100%;
+  padding: 7px 13px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.flow-register button::before {
+  color: var(--olive);
+  content: counter(flow, decimal-leading-zero);
+}
+
+.flow-register button:hover span,
+.flow-register button:focus-visible span {
+  text-decoration: underline;
+}
+
+.flow-register span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flow-register b {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.depth-controls {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  background: rgba(215, 207, 159, 0.92);
+  pointer-events: auto;
+  font-size: 8px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.depth-controls span {
+  min-width: 52px;
+  white-space: nowrap;
+}
+
+.depth-controls input {
+  width: 96px;
+  margin: 0;
+  accent-color: var(--olive);
+}
+
+/* Flow view */
+
+.toolbar-cluster {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.view-controls {
+  display: flex;
+  border: 1px solid var(--line);
+  background: rgba(215, 207, 159, 0.92);
+  pointer-events: auto;
+}
+
+.view-controls button {
+  min-height: 29px;
+  padding: 0 12px;
+  border-right: 1px solid var(--hairline);
+  background: transparent;
+  cursor: pointer;
+  font-size: 8px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.view-controls button:last-child {
+  border-right: 0;
+}
+
+.view-controls button[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--paper-light);
+}
+
+.flow-mount {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.flow-scroll {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  background:
+    repeating-linear-gradient(0deg, transparent 0 23px, rgba(20, 21, 15, 0.05) 23px 24px),
+    repeating-linear-gradient(90deg, transparent 0 23px, rgba(20, 21, 15, 0.05) 23px 24px),
+    var(--paper);
+}
+
+.flow-diagram {
+  display: block;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.flow-column-label {
+  fill: var(--olive);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+}
+
+.flow-edge-line {
+  fill: none;
+  stroke: var(--ink);
+  stroke-opacity: 0.3;
+  transition: stroke-opacity 120ms;
+}
+
+.flow-edge-pulse {
+  fill: none;
+  stroke: var(--rust);
+  stroke-width: 2;
+  stroke-opacity: 0.5;
+  stroke-dasharray: 3 15;
+  stroke-linecap: round;
+  animation: flow-march 1.6s linear infinite;
+}
+
+@keyframes flow-march {
+  to {
+    stroke-dashoffset: -18;
+  }
+}
+
+.flow-edge-arrow {
+  fill: var(--ink);
+  fill-opacity: 0.45;
+}
+
+.flow-edge.is-cycle .flow-edge-line {
+  stroke: var(--rust);
+  stroke-opacity: 0.5;
+  stroke-dasharray: 4 4;
+}
+
+.flow-edge.is-cycle .flow-edge-arrow {
+  fill: var(--rust);
+  fill-opacity: 0.5;
+}
+
+.flow-edge.is-hot .flow-edge-line {
+  stroke: var(--rust);
+  stroke-opacity: 0.9;
+}
+
+.flow-edge.is-hot .flow-edge-arrow {
+  fill: var(--rust);
+  fill-opacity: 1;
+}
+
+.flow-edge.is-hot .flow-edge-pulse {
+  stroke-opacity: 1;
+}
+
+.flow-edge.is-cold .flow-edge-line {
+  stroke-opacity: 0.06;
+}
+
+.flow-edge.is-cold .flow-edge-arrow {
+  fill-opacity: 0.06;
+}
+
+.flow-edge.is-cold .flow-edge-pulse {
+  display: none;
+}
+
+.flow-chip {
+  cursor: pointer;
+}
+
+.flow-chip .chip-plate {
+  fill: var(--paper-light);
+  stroke: var(--ink);
+  transition: opacity 120ms;
+}
+
+.flow-chip:hover .chip-plate {
+  fill: #ece5b8;
+}
+
+.flow-chip:focus-visible {
+  outline: 2px solid var(--rust);
+}
+
+.flow-chip .chip-name {
+  fill: var(--ink);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.flow-chip .chip-meta {
+  fill: var(--olive);
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  font-variant-numeric: tabular-nums;
+}
+
+.flow-chip.is-selected .chip-plate {
+  fill: var(--ink);
+}
+
+.flow-chip.is-selected .chip-name {
+  fill: var(--paper-light);
+}
+
+.flow-chip.is-selected .chip-meta {
+  fill: var(--paper-dark);
+}
+
+.flow-chip.is-dimmed,
+.flow-chip.is-faded {
+  opacity: 0.22;
+}
+
+.chip-mark {
+  stroke: var(--ink);
+}
+
+.chip-directory,
+.chip-repository {
+  fill: #77724d;
+}
+
+.chip-source {
+  fill: #b1a76d;
+}
+
+.chip-config {
+  fill: #827a4d;
+}
+
+.chip-documentation {
+  fill: #c0b77c;
+}
+
+.chip-asset {
+  fill: #9c9462;
+}
+
+.flow-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 10px;
+  height: 100%;
+  padding: 0 clamp(24px, 16vw, 200px);
+}
+
+.flow-empty p {
+  max-width: 430px;
+  color: var(--olive);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+@media (max-width: 720px) {
+  .toolbar-cluster {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flow-edge-pulse {
+    animation: none;
   }
 }
