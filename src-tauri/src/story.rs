@@ -128,7 +128,7 @@ fn validate(story: &mut Story, node_ids: &BTreeSet<&str>, warnings: &mut Vec<Str
     let mut seen = BTreeSet::new();
     story.actors.retain(|actor| {
         if !seen.insert(actor.id.clone()) {
-            warnings.push(format!("Story actor \"{}\" is defined twice.", actor.id));
+            warnings.push(format!("Story: actor \"{}\" is defined twice.", actor.id));
             return false;
         }
         true
@@ -146,7 +146,7 @@ fn validate(story: &mut Story, node_ids: &BTreeSet<&str>, warnings: &mut Vec<Str
     }
     if !unknown_modules.is_empty() {
         warnings.push(format!(
-            "The story points at {} path(s) not in this repository: {}.",
+            "Story: {} path(s) are not in this repository and were dropped: {}.",
             unknown_modules.len(),
             unknown_modules.join(", ")
         ));
@@ -162,7 +162,9 @@ fn validate(story: &mut Story, node_ids: &BTreeSet<&str>, warnings: &mut Vec<Str
         known
     });
     if dangling > 0 {
-        warnings.push(format!("{dangling} story flow(s) name an unknown actor."));
+        warnings.push(format!(
+            "Story: {dangling} flow(s) name an actor the story does not define."
+        ));
     }
 
     let connected: BTreeSet<(&str, &str)> = story
@@ -182,7 +184,7 @@ fn validate(story: &mut Story, node_ids: &BTreeSet<&str>, warnings: &mut Vec<Str
         match broken {
             Some(pair) => {
                 warnings.push(format!(
-                    "Story journey \"{}\" has no flow from {} to {}.",
+                    "Story: journey \"{}\" has no flow from {} to {}.",
                     journey.name, pair[0], pair[1]
                 ));
                 false

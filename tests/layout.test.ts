@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  aggregateImports,
   arteryKeys,
   buildRepositoryLayout,
   flowKey,
@@ -92,7 +93,9 @@ test("keeps direct import flows and drops intra-module ones", () => {
   );
 
   const layout = buildRepositoryLayout(graph);
-  assert.deepEqual(layout.imports, [{ source: "a/one.ts", target: "b/two.ts", weight: 1 }]);
+  assert.deepEqual(layout.imports, [
+    { source: "a/one.ts", target: "b/two.ts", weight: 1, symbols: [] },
+  ]);
 });
 
 test("nests each module inside its parent's district footprint", () => {
@@ -195,7 +198,7 @@ test("depth limit coarsens the map and aggregates flows to visible modules", () 
     layout.modules.map((module) => module.node.id),
     [".", "a", "b"],
   );
-  assert.deepEqual(layout.imports, [{ source: "a", target: "b", weight: 1 }]);
+  assert.deepEqual(layout.imports, [{ source: "a", target: "b", weight: 1, symbols: [] }]);
 });
 
 test("selecting a depth-limit district reveals its children without raising depth", () => {
@@ -240,7 +243,9 @@ test("selecting a depth-limit district reveals its children without raising dept
       child.y > a.y,
     "peeked files sit inside the selected district",
   );
-  assert.deepEqual(open.imports, [{ source: "a/one.ts", target: "b", weight: 1 }]);
+  assert.deepEqual(open.imports, [
+    { source: "a/one.ts", target: "b", weight: 1, symbols: [] },
+  ]);
 
   const keep = buildRepositoryLayout(graph, 1, "a/one.ts");
   const keepIds = new Set(keep.modules.map((module) => module.node.id));
@@ -316,7 +321,45 @@ test("lifts unrendered file imports to their rendered ancestors with weights", (
   const layout = buildRepositoryLayout(graphOf(nodes, edges));
   const renderedIds = new Set(layout.modules.map((module) => module.node.id));
   assert.ok(!renderedIds.has("app/one.ts"), "depth-2 files fall beyond the render cap");
-  assert.deepEqual(layout.imports, [{ source: "app", target: "lib", weight: 2 }]);
+  assert.deepEqual(layout.imports, [
+    { source: "app", target: "lib", weight: 2, symbols: [] },
+  ]);
+});
+
+test("an aggregated route carries the union of what crosses its file edges", () => {
+  // Two files in one package import a third; the merged package-level arc must
+  // still be able to say what actually travels, or a flow edge means nothing
+  // more than "these two touch".
+  const nodes = [
+    node({ id: ".", kind: "repository" }),
+    node({ id: "app", kind: "directory" }),
+    node({ id: "lib", kind: "directory" }),
+    node({ id: "app/one.ts", depth: 2 }),
+    node({ id: "app/two.ts", depth: 2 }),
+    node({ id: "lib/core.ts", depth: 2 }),
+  ];
+  const edges: RepositoryEdge[] = [
+    { source: ".", target: "app", kind: "contains" },
+    { source: ".", target: "lib", kind: "contains" },
+    { source: "app", target: "app/one.ts", kind: "contains" },
+    { source: "app", target: "app/two.ts", kind: "contains" },
+    { source: "lib", target: "lib/core.ts", kind: "contains" },
+    { source: "app/one.ts", target: "lib/core.ts", kind: "imports", symbols: ["parse", "Graph"] },
+    { source: "app/two.ts", target: "lib/core.ts", kind: "imports", symbols: ["Graph", "render"] },
+  ];
+  const parentOf = new Map([
+    ["app", "."],
+    ["lib", "."],
+    ["app/one.ts", "app"],
+    ["app/two.ts", "app"],
+    ["lib/core.ts", "lib"],
+  ]);
+  const flows = aggregateImports(graphOf(nodes, edges), new Set(["app", "lib"]), parentOf);
+
+  assert.equal(flows.length, 1);
+  assert.equal(flows[0].weight, 2);
+  // Sorted and de-duplicated: "Graph" crosses on both file edges.
+  assert.deepEqual(flows[0].symbols, ["Graph", "parse", "render"]);
 });
 
 test("artery keys keep the heaviest import routes", () => {

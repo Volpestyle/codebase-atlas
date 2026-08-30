@@ -1994,7 +1994,7 @@ function App() {
             </>
           ) : (
             <>
-              Click a module to trace its flow · hover to preview · <kbd>G</kbd> GitHub · <kbd>/</kbd> search
+              Click a module to trace its flow · click a route to see what crosses it · <kbd>G</kbd> GitHub · <kbd>/</kbd> search
             </>
           )}
         </p>

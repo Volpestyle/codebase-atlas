@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import type { LayerVisibility, RepositoryGraph, RepositoryNode } from "./model";
+import { crossingLabel, type LayerVisibility, type RepositoryGraph, type RepositoryNode } from "./model";
 import {
   buildFlowLayout,
   chipContents,
@@ -172,6 +172,9 @@ function MiniMap({ graph, node, searchQuery, depth, onSelect }: MiniMapProps) {
 
 function FlowScene({ graph, selectedId, searchQuery, maxDepth, onSelect }: FlowSceneProps) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  // A route is worth asking about on its own: its weight says how much crosses,
+  // but only the bindings say what.
+  const [openEdge, setOpenEdge] = useState<string | null>(null);
   // Touch-primary devices (iPad) have no hover; tracing rides selection there.
   const hoverCapable = useMemo(() => window.matchMedia("(hover: hover)").matches, []);
   const layout = useMemo(() => buildFlowLayout(graph, maxDepth), [graph, maxDepth]);
@@ -321,6 +324,10 @@ function FlowScene({ graph, selectedId, searchQuery, maxDepth, onSelect }: FlowS
     edgeShapes.push({ edge, path, arrow, cycle });
   }
 
+  const openFlow = openEdge
+    ? (layout.edges.find((edge) => edgeKey(edge) === openEdge) ?? null)
+    : null;
+
   return (
     <div className="flow-mount">
       <div className="flow-scroll">
@@ -342,15 +349,38 @@ function FlowScene({ graph, selectedId, searchQuery, maxDepth, onSelect }: FlowS
             const key = edgeKey(edge);
             const hot = active?.hot.has(key) ?? false;
             const state = active ? (hot ? " is-hot" : " is-cold") : "";
+            const crossing = crossingLabel(edge.symbols);
             return (
-              <g key={key} className={`flow-edge${cycle ? " is-cycle" : ""}${state}`}>
+              <g
+                key={key}
+                className={`flow-edge${cycle ? " is-cycle" : ""}${state}${
+                  openEdge === key ? " is-open" : ""
+                }`}
+              >
+                <path
+                  className="flow-edge-hit"
+                  d={path}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Route: ${edge.source} imports ${edge.target}`}
+                  onClick={() => setOpenEdge((current) => (current === key ? null : key))}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setOpenEdge((current) => (current === key ? null : key));
+                    }
+                  }}
+                >
+                  <title>
+                    {`${edge.source} imports ${edge.target} × ${edge.weight}`}
+                    {crossing ? `\n${crossing}` : ""}
+                  </title>
+                </path>
                 <path
                   className="flow-edge-line"
                   d={path}
                   strokeWidth={1 + 2.4 * (edge.weight / maxWeight)}
-                >
-                  <title>{`${edge.source} imports ${edge.target} × ${edge.weight}`}</title>
-                </path>
+                />
                 {animated && !cycle ? <path className="flow-edge-pulse" d={path} /> : null}
                 <path className="flow-edge-arrow" d={arrow} />
               </g>
@@ -443,6 +473,44 @@ function FlowScene({ graph, selectedId, searchQuery, maxDepth, onSelect }: FlowS
           })}
         </svg>
       </div>
+
+      {openFlow ? (
+        <aside className="flow-route" aria-label="Selected import route">
+          <div className="flow-route-head">
+            <span className="section-index">Route · {openFlow.weight} imports</span>
+            <button
+              type="button"
+              onClick={() => setOpenEdge(null)}
+              aria-label="Close route"
+            >
+              ✕
+            </button>
+          </div>
+          <p className="flow-route-pair">
+            <button type="button" onClick={() => onSelect(openFlow.source)}>
+              {openFlow.source}
+            </button>
+            <span aria-hidden="true"> → </span>
+            <button type="button" onClick={() => onSelect(openFlow.target)}>
+              {openFlow.target}
+            </button>
+          </p>
+          {openFlow.symbols.length > 0 ? (
+            <>
+              <span className="section-index">What crosses</span>
+              <ul className="flow-route-symbols">
+                {openFlow.symbols.map((symbol) => (
+                  <li key={symbol}>{symbol}</li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <p className="flow-route-empty">
+              Nothing named crosses this route — side-effect or dynamic imports only.
+            </p>
+          )}
+        </aside>
+      ) : null}
 
       {selectedNode ? (
         <MiniMap

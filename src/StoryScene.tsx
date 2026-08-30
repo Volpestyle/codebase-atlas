@@ -135,6 +135,9 @@ function StoryScene({ story, selectedId, onSelect }: StorySceneProps) {
   // an actor is a role, and picking one of its modules for the reader would be
   // arbitrary whenever it has more than one.
   const [pinned, setPinned] = useState<string | null>(null);
+  // A connection can be pinned the same way a part can, so its meaning stays
+  // on screen while the reader looks at the two ends of it.
+  const [pinnedFlow, setPinnedFlow] = useState<string | null>(null);
   const [journeyIndex, setJourneyIndex] = useState<number | null>(null);
   const [step, setStep] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -191,6 +194,7 @@ function StoryScene({ story, selectedId, onSelect }: StorySceneProps) {
     setStep(0);
     setPlaying(true);
     setPinned(null);
+    setPinnedFlow(null);
   };
 
   const stopJourney = () => {
@@ -211,8 +215,9 @@ function StoryScene({ story, selectedId, onSelect }: StorySceneProps) {
 
   let liveActors: Set<string> | null = null;
   let liveFlows: Set<string> | null = null;
-  const pointedFlow = !hop && hoveredFlow
-    ? (story.flows.find((flow) => flowKey(flow) === hoveredFlow) ?? null)
+  const activeFlowKey = hoveredFlow ?? pinnedFlow;
+  const pointedFlow = !hop && activeFlowKey
+    ? (story.flows.find((flow) => flowKey(flow) === activeFlowKey) ?? null)
     : null;
   if (hop) {
     liveActors = new Set([hop.from, hop.to]);
@@ -243,7 +248,12 @@ function StoryScene({ story, selectedId, onSelect }: StorySceneProps) {
   return (
     <div className="story-mount">
       <div className="story-brief">
-        <p className="story-summary">{story.summary}</p>
+        <div className="story-summary-block">
+          <p className="story-summary">{story.summary}</p>
+          <p className="story-provenance">
+            {`${story.actors.length} parts · ${story.flows.length} connections · written by hand, checked against this scan`}
+          </p>
+        </div>
         {story.journeys.length > 0 ? (
           <div className="story-journeys">
             <span className="section-index">Follow the data</span>
@@ -297,13 +307,32 @@ function StoryScene({ story, selectedId, onSelect }: StorySceneProps) {
                   key={shape.key}
                   className={`story-flow${shape.back ? " is-back" : ""}${
                     live ? " is-live" : ""
-                  }${dim ? " is-dim" : ""}`}
+                  }${dim ? " is-dim" : ""}${
+                    pinnedFlow === shape.key ? " is-pinned" : ""
+                  }`}
                 >
                   <path
                     className="story-flow-hit"
                     d={shape.path}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Connection: ${shape.flow.carries}`}
                     onPointerEnter={() => setHoveredFlow(shape.key)}
                     onPointerLeave={() => setHoveredFlow(null)}
+                    onClick={() => {
+                      setPinnedFlow((current) =>
+                        current === shape.key ? null : shape.key,
+                      );
+                      setPinned(null);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setPinnedFlow((current) =>
+                          current === shape.key ? null : shape.key,
+                        );
+                      }
+                    }}
                   >
                     <title>
                       {shape.flow.carries}
@@ -326,9 +355,12 @@ function StoryScene({ story, selectedId, onSelect }: StorySceneProps) {
               pinned={pinned === card.actor.id}
               onEnter={() => setHovered(card.actor.id)}
               onLeave={() => setHovered(null)}
-              onPin={() =>
-                setPinned((current) => (current === card.actor.id ? null : card.actor.id))
-              }
+              onPin={() => {
+                setPinnedFlow(null);
+                setPinned((current) =>
+                  current === card.actor.id ? null : card.actor.id,
+                );
+              }}
               onOpen={onSelect}
             />
           ))}
@@ -385,21 +417,55 @@ function StoryScene({ story, selectedId, onSelect }: StorySceneProps) {
               <span className="story-caption-carries">{hop.text}</span>
             </p>
           ) : pointedFlow ? (
-            <p className="story-caption-text">
-              <strong>
-                {layout.cardById.get(pointedFlow.from)?.actor.name ?? pointedFlow.from}
-              </strong>
-              <span aria-hidden="true"> → </span>
-              <strong>
-                {layout.cardById.get(pointedFlow.to)?.actor.name ?? pointedFlow.to}
-              </strong>
-              <span className="story-caption-carries">{pointedFlow.carries}</span>
-              {pointedFlow.returns ? (
-                <span className="story-caption-returns">
-                  and back: {pointedFlow.returns}
-                </span>
-              ) : null}
-            </p>
+            <>
+              <p className="story-caption-text">
+                <strong>
+                  {layout.cardById.get(pointedFlow.from)?.actor.name ?? pointedFlow.from}
+                </strong>
+                <span aria-hidden="true"> → </span>
+                <strong>
+                  {layout.cardById.get(pointedFlow.to)?.actor.name ?? pointedFlow.to}
+                </strong>
+                <span className="story-caption-carries">{pointedFlow.carries}</span>
+                {pointedFlow.returns ? (
+                  <span className="story-caption-returns">
+                    and back: {pointedFlow.returns}
+                  </span>
+                ) : (
+                  <span className="story-caption-note">Nothing comes back this way.</span>
+                )}
+              </p>
+              {/* The two ends in code, so a connection is traceable to files
+                  rather than being prose the reader has to take on faith. */}
+              <div className="story-caption-ends">
+                {([pointedFlow.from, pointedFlow.to] as const).map((id, index) => {
+                  const actor = layout.cardById.get(id)?.actor;
+                  const modules = actor?.modules ?? [];
+                  return (
+                    <div key={id} className="story-caption-end">
+                      <span className="section-index">
+                        {index === 0 ? "From" : "To"} · {actor?.name ?? id}
+                      </span>
+                      {modules.length > 0 ? (
+                        <ul>
+                          {modules.map((module) => (
+                            <li key={module}>
+                              <button type="button" onClick={() => onSelect(module)}>
+                                {module}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="story-caption-outside">
+                          Not code in this repository.
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </>
           ) : null}
           {journey?.blurb ? <p className="story-caption-note">{journey.blurb}</p> : null}
         </div>

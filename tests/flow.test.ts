@@ -132,7 +132,7 @@ test("depth limit aggregates file imports into weighted module edges", () => {
   assert.equal(layout.effectiveDepth, 1, "enough modules at depth 1, no auto-deepening");
   assert.deepEqual(
     layout.edges.find((edge) => edge.source === "app"),
-    { source: "app", target: "lib", weight: 2 },
+    { source: "app", target: "lib", weight: 2, symbols: [] },
     "intra-module imports drop; cross-module imports merge with weight",
   );
   const app = layout.chips.find((chip) => chip.node.id === "app")!;

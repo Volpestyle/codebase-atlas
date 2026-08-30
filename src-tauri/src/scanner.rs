@@ -631,11 +631,20 @@ const MAX_SUMMARY_CHARS: usize = 480;
 /// Attaches summaries from a `.codebase-index/` markdown mirror (see the
 /// codebase-index convention: one `<path>.md` per scanned path, `_root.md`
 /// for the repository root) to the nodes they describe.
+///
+/// `.codebase-index/` is a shared convention rather than one tool's private
+/// directory: the markdown mirror and `_story.json` live there together but
+/// have separate lifecycles. `.last-commit` tracks the mirror, which is
+/// regenerated per commit, and says nothing about the story, which is written
+/// once and revised — and which the scan validates against the tree directly.
+/// So this warning names the summaries it actually covers, and stays quiet
+/// when no summary was attached to anything.
 fn attach_index_summaries(root: &Path, nodes: &mut [RepositoryNode], warnings: &mut Vec<String>) {
     let index_root = root.join(".codebase-index");
     if !index_root.is_dir() {
         return;
     }
+    let mut attached = 0usize;
     for node in nodes.iter_mut() {
         let entry = if node.id == "." {
             index_root.join("_root.md")
@@ -644,7 +653,13 @@ fn attach_index_summaries(root: &Path, nodes: &mut [RepositoryNode], warnings: &
         };
         if let Ok(text) = fs::read_to_string(entry) {
             node.description = index_summary(&text);
+            if node.description.is_some() {
+                attached += 1;
+            }
         }
+    }
+    if attached == 0 {
+        return;
     }
 
     let last_indexed = fs::read_to_string(index_root.join(".last-commit"))
@@ -653,7 +668,9 @@ fn attach_index_summaries(root: &Path, nodes: &mut [RepositoryNode], warnings: &
     if let (Some(last_indexed), Some(head)) = (last_indexed, git_head_commit(root)) {
         if last_indexed != head {
             warnings.push(
-                "The codebase index is behind HEAD; module summaries may be stale.".to_owned(),
+                "Module summaries from .codebase-index/ are behind HEAD and may be stale. \
+                 This does not cover the story, which is checked against this scan."
+                    .to_owned(),
             );
         }
     }

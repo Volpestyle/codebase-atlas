@@ -19,7 +19,15 @@ export interface ImportFlow {
   source: string;
   target: string;
   weight: number;
+  /** The union of bindings crossing the file-level edges this route merges,
+   *  so an aggregated arc can still say what actually travels along it.
+   *  Bounded, because one wide route must not carry a whole module's surface. */
+  symbols: string[];
 }
+
+// A route's crossing list is a label, not an index; past this the reader is
+// better served by opening the module.
+const MAX_FLOW_SYMBOLS = 24;
 
 export function flowKey(flow: Pick<ImportFlow, "source" | "target">) {
   return `${flow.source}\0${flow.target}`;
@@ -446,6 +454,7 @@ export function aggregateImports(
   };
 
   const flows = new Map<string, ImportFlow>();
+  const crossing = new Map<string, Set<string>>();
   for (const edge of graph.edges) {
     if (edge.kind !== "imports") continue;
     const source = liftToRendered(edge.source);
@@ -454,7 +463,16 @@ export function aggregateImports(
     const key = JSON.stringify([source, target]);
     const flow = flows.get(key);
     if (flow) flow.weight += 1;
-    else flows.set(key, { source, target, weight: 1 });
+    else flows.set(key, { source, target, weight: 1, symbols: [] });
+    let names = crossing.get(key);
+    if (!names) {
+      names = new Set();
+      crossing.set(key, names);
+    }
+    for (const symbol of edge.symbols ?? []) names.add(symbol);
+  }
+  for (const [key, flow] of flows) {
+    flow.symbols = [...(crossing.get(key) ?? [])].sort().slice(0, MAX_FLOW_SYMBOLS);
   }
   return [...flows.values()].sort(
     (left, right) =>
