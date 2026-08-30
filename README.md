@@ -203,6 +203,9 @@ The story view reads `.codebase-index/_story.json`. It is written by hand (or by
 - `carries` and `returns` are sentences, not type names. One arrow carries both directions.
 - `steps` are actor ids. Consecutive pairs need a flow in one direction or the other; a step taken against a flow reads as its `returns`.
 - Everything is checked against the scanned tree. Unknown ids and stale paths are dropped and reported as scan warnings rather than failing the scan, so the story keeps rendering the part that is still true.
+- `.codebase-index/` itself is not scanned, so a story cannot list itself as one of an actor's modules.
+
+This repository carries its own story at `.codebase-index/_story.json`. Scanning Atlas with Atlas is the shortest way to see what a finished one looks like.
 
 ## Development
 

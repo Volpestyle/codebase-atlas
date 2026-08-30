@@ -1,0 +1,262 @@
+{
+  "version": 1,
+  "summary": "Codebase Atlas reads a folder of code and draws it three ways. It never runs the code or changes it \u2014 it reads the files, works out which ones use which, and turns that into a map you can look around, a diagram of how work flows between the parts, and a plain-English story of what the whole thing does. The story is the only part it cannot work out on its own: somebody writes that down, and Atlas checks it against what it just read.",
+  "actors": [
+    {
+      "id": "reader",
+      "name": "Someone trying to understand a codebase",
+      "role": "person",
+      "blurb": "A new joiner, a designer, anyone who needs to know how the software fits together."
+    },
+    {
+      "id": "agent",
+      "name": "An AI agent",
+      "role": "person",
+      "blurb": "Reads the same map as JSON instead of looking at it, to answer questions about the code."
+    },
+    {
+      "id": "desktop",
+      "name": "The desktop app",
+      "role": "surface",
+      "blurb": "The window on a Mac, Windows or Linux machine. The only place that can open a folder from the disk.",
+      "modules": [
+        "src-tauri/src/app.rs",
+        "src-tauri/src/main.rs"
+      ]
+    },
+    {
+      "id": "cli",
+      "name": "The command line",
+      "role": "surface",
+      "blurb": "Prints the whole map as JSON, so scripts and agents can read a codebase without a screen.",
+      "modules": [
+        "src-tauri/src/cli.rs",
+        "src-tauri/src/bin/atlas.rs"
+      ]
+    },
+    {
+      "id": "companion",
+      "name": "The iPad companion",
+      "role": "surface",
+      "blurb": "An iPad or phone borrowing a computer's eyes over Wi-Fi. It never holds the code itself.",
+      "modules": [
+        "src-tauri/src/companion.rs",
+        "src/companion.ts",
+        "src/PairingScanner.tsx"
+      ]
+    },
+    {
+      "id": "reader-engine",
+      "name": "The reader",
+      "role": "core",
+      "blurb": "Walks the folder, skips what git ignores, and measures every file it keeps.",
+      "modules": [
+        "src-tauri/src/scanner.rs"
+      ]
+    },
+    {
+      "id": "parser",
+      "name": "The parser",
+      "role": "core",
+      "blurb": "Actually reads the code to find what each file declares and which other files it uses \u2014 no guessing from filenames.",
+      "modules": [
+        "src-tauri/src/symbols.rs",
+        "src-tauri/src/imports.rs"
+      ]
+    },
+    {
+      "id": "storykeeper",
+      "name": "The story checker",
+      "role": "core",
+      "blurb": "Reads the hand-written story and throws out any part that no longer matches the code, saying which.",
+      "modules": [
+        "src-tauri/src/story.rs"
+      ]
+    },
+    {
+      "id": "graph",
+      "name": "The one description",
+      "role": "store",
+      "blurb": "Everything learned about the codebase in one shape. Every view and every tool reads this and nothing else.",
+      "modules": [
+        "src/model.ts",
+        "src-tauri/src/lib.rs"
+      ]
+    },
+    {
+      "id": "views",
+      "name": "The three views",
+      "role": "core",
+      "blurb": "The story you land on, the map you fly over, and the flow diagram of what uses what.",
+      "modules": [
+        "src/StoryScene.tsx",
+        "src/RepositoryScene.tsx",
+        "src/FlowScene.tsx",
+        "src/App.tsx"
+      ]
+    },
+    {
+      "id": "folder",
+      "name": "A folder of code",
+      "role": "external",
+      "blurb": "Somebody's repository, sitting on a disk. Only ever read, never written to."
+    },
+    {
+      "id": "written-story",
+      "name": "The hand-written story",
+      "role": "external",
+      "blurb": "A short account of what the code is for, written by a person or an agent. No parser can work this out."
+    },
+    {
+      "id": "github",
+      "name": "GitHub",
+      "role": "external",
+      "blurb": "Where public repositories come from when there is no folder on this machine.",
+      "modules": [
+        "src/github.ts",
+        "src/github-url.ts"
+      ]
+    }
+  ],
+  "flows": [
+    {
+      "from": "reader",
+      "to": "desktop",
+      "carries": "a folder to look at",
+      "returns": "a map, a flow diagram, and a story to read"
+    },
+    {
+      "from": "agent",
+      "to": "cli",
+      "carries": "the name of a folder",
+      "returns": "the whole description as JSON"
+    },
+    {
+      "from": "reader",
+      "to": "companion",
+      "carries": "which of a computer's shared folders to open",
+      "returns": "the same map, drawn on the iPad"
+    },
+    {
+      "from": "companion",
+      "to": "desktop",
+      "carries": "a request over Wi-Fi, with the pairing code",
+      "returns": "the map the computer drew"
+    },
+    {
+      "from": "desktop",
+      "to": "reader-engine",
+      "carries": "read this folder",
+      "returns": "every file that matters, and how big it is"
+    },
+    {
+      "from": "cli",
+      "to": "reader-engine",
+      "carries": "read this folder",
+      "returns": "the same description the app would draw"
+    },
+    {
+      "from": "reader-engine",
+      "to": "folder",
+      "carries": "which files are here, and how large?",
+      "returns": "names, sizes, and text to count"
+    },
+    {
+      "from": "reader-engine",
+      "to": "parser",
+      "carries": "each file worth reading properly",
+      "returns": "what it declares, and which files it uses"
+    },
+    {
+      "from": "reader-engine",
+      "to": "storykeeper",
+      "carries": "the story, and everything just found in the folder",
+      "returns": "the parts of the story that are still true, and complaints about the rest"
+    },
+    {
+      "from": "storykeeper",
+      "to": "written-story",
+      "carries": "is there a story here?",
+      "returns": "the parts, what travels between them, and the journeys"
+    },
+    {
+      "from": "reader-engine",
+      "to": "graph",
+      "carries": "everything learned, assembled into one description",
+      "returns": "the finished description, ready to hand to anything that asks"
+    },
+    {
+      "from": "github",
+      "to": "graph",
+      "carries": "a public repository's file list, with no file contents"
+    },
+    {
+      "from": "graph",
+      "to": "views",
+      "carries": "the parts, how they contain each other, and what uses what",
+      "returns": "whatever the reader clicked on"
+    },
+    {
+      "from": "views",
+      "to": "reader",
+      "carries": "a story to follow, a map to fly over, and routes to open"
+    }
+  ],
+  "journeys": [
+    {
+      "name": "Someone opens a folder on their laptop",
+      "blurb": "The ordinary path. Nothing leaves the machine.",
+      "steps": [
+        "reader",
+        "desktop",
+        "reader-engine",
+        "folder",
+        "reader-engine",
+        "parser",
+        "reader-engine",
+        "graph",
+        "views",
+        "reader"
+      ]
+    },
+    {
+      "name": "The story gets checked against the code",
+      "blurb": "Why a story that has drifted still shows the part that is true.",
+      "steps": [
+        "reader-engine",
+        "storykeeper",
+        "written-story",
+        "storykeeper",
+        "reader-engine",
+        "graph",
+        "views"
+      ]
+    },
+    {
+      "name": "An agent reads the codebase instead of looking at it",
+      "blurb": "The same description, with no screen involved.",
+      "steps": [
+        "agent",
+        "cli",
+        "reader-engine",
+        "graph",
+        "reader-engine",
+        "cli",
+        "agent"
+      ]
+    },
+    {
+      "name": "An iPad borrows a computer's eyes",
+      "blurb": "The tablet never holds the code \u2014 the computer reads and sends the result.",
+      "steps": [
+        "reader",
+        "companion",
+        "desktop",
+        "reader-engine",
+        "graph",
+        "views",
+        "reader"
+      ]
+    }
+  ]
+}
