@@ -69,6 +69,7 @@ interface SceneVisual {
   fill: THREE.MeshStandardMaterial;
   wire: THREE.LineBasicMaterial;
   label: THREE.SpriteMaterial | null;
+  labelSprite: THREE.Sprite | null;
   baseColor: number;
   width: number;
   depth: number;
@@ -102,7 +103,7 @@ interface SceneEngine {
   modulesGroup: THREE.Group;
   importsGroup: THREE.Group;
   visuals: Map<string, SceneVisual>;
-  hitTargets: THREE.Mesh[];
+  hitTargets: THREE.Object3D[];
   arcTargets: THREE.Mesh[];
   importVisuals: ImportVisual[];
   hoveredId: string | null;
@@ -126,18 +127,23 @@ function createLabel(palette: MapPalette, text: string, kind: "district" | "file
   context.textBaseline = "middle";
   const max = compact ? 6 : 27;
   const label = (text.length > max ? `${text.slice(0, max - 2)}..` : text).toUpperCase();
+  // Only part of the canvas carries ink; picking uses that extent so the
+  // transparent margin around a tag never steals clicks from the map behind.
+  const inkWidth = Math.min(
+    canvas.width - 4,
+    context.measureText(label).width + (compact ? 14 : 30),
+  );
+  const inkHeight = compact ? 30 : 46;
   if (!compact) {
     // District names ride on a paper tag so they stay legible over rooftops
     // of the same olive family.
-    const plateWidth = Math.min(canvas.width - 4, context.measureText(label).width + 30);
-    const plateHeight = 46;
-    const plateX = (canvas.width - plateWidth) / 2;
-    const plateY = (canvas.height - plateHeight) / 2;
+    const plateX = (canvas.width - inkWidth) / 2;
+    const plateY = (canvas.height - inkHeight) / 2;
     context.fillStyle = palette.paperCss;
-    context.fillRect(plateX, plateY, plateWidth, plateHeight);
+    context.fillRect(plateX, plateY, inkWidth, inkHeight);
     context.lineWidth = 3;
     context.strokeStyle = palette.ink;
-    context.strokeRect(plateX, plateY, plateWidth, plateHeight);
+    context.strokeRect(plateX, plateY, inkWidth, inkHeight);
   }
   context.fillStyle = palette.ink;
   context.fillText(label, canvas.width / 2, canvas.height / 2);
@@ -152,6 +158,7 @@ function createLabel(palette: MapPalette, text: string, kind: "district" | "file
   const sprite = new THREE.Sprite(material);
   sprite.scale.set(compact ? 2.2 : 5.4, compact ? 0.46 : 1.02, 1);
   sprite.renderOrder = 4;
+  sprite.userData.labelHit = { u: inkWidth / canvas.width, v: inkHeight / canvas.height };
   return { sprite, material };
 }
 
@@ -231,6 +238,7 @@ function populateLayout(engine: SceneEngine, layout: RepositoryLayout) {
     const visual = createModuleVisual(palette, module, labelModes.get(module.node.id) ?? null);
     engine.modulesGroup.add(visual.group);
     engine.hitTargets.push(visual.mesh);
+    if (visual.labelSprite) engine.hitTargets.push(visual.labelSprite);
     engine.visuals.set(module.node.id, visual);
   }
 
@@ -365,6 +373,7 @@ function createModuleVisual(
     label = createLabel(palette, nodeGlyph(module.node), "file");
     if (label) {
       const width = Math.max(1.4, Math.min(2.8, module.width * 0.9));
+      label.sprite.userData.nodeId = module.node.id;
       label.sprite.scale.set(width, width * 0.21, 1);
       label.sprite.position.set(0, module.height + 0.34, 0);
       group.add(label.sprite);
@@ -378,6 +387,7 @@ function createModuleVisual(
         labelMode === "region"
           ? THREE.MathUtils.clamp(module.width * 0.5, 3.4, 8.5)
           : THREE.MathUtils.clamp(module.width * 0.7, 2.4, 4.6);
+      label.sprite.userData.nodeId = module.node.id;
       label.sprite.scale.set(width, width * 0.1875, 1);
       label.sprite.position.set(0, module.height + (labelMode === "region" ? 2.3 : 0.45), 0);
       group.add(label.sprite);
@@ -391,6 +401,7 @@ function createModuleVisual(
     fill,
     wire,
     label: label?.material ?? null,
+    labelSprite: label?.sprite ?? null,
     baseColor,
     width: module.width,
     depth: module.depth,
@@ -647,14 +658,27 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
 
       controls.addEventListener("change", render);
 
+      function hitLands(hit: THREE.Intersection) {
+        if (!hit.object.parent?.visible) return false;
+        const ink = hit.object.userData.labelHit as { u: number; v: number } | undefined;
+        if (!ink) return true;
+        // A tag's quad is mostly transparent; only its ink is clickable.
+        return (
+          !!hit.uv &&
+          Math.abs(hit.uv.x - 0.5) <= ink.u / 2 &&
+          Math.abs(hit.uv.y - 0.5) <= ink.v / 2
+        );
+      }
+
       function pointFromEvent(event: PointerEvent) {
         const rect = renderer.domElement.getBoundingClientRect();
         pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
         pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
         raycaster.setFromCamera(pointer, camera);
-        return raycaster
-          .intersectObjects(engine.hitTargets, false)
-          .find((hit) => hit.object.parent?.visible);
+        const hits = raycaster.intersectObjects(engine.hitTargets, false).filter(hitLands);
+        // Tags draw over everything, so a tag takes the click even when a
+        // tower it floats past is nearer the camera.
+        return hits.find((hit) => hit.object.userData.labelHit) ?? hits[0];
       }
 
       function handlePointerMove(event: PointerEvent) {
@@ -663,7 +687,8 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
           .intersectObjects(engine.arcTargets, false)
           .find((candidate) => candidate.object.parent?.visible);
         // Whichever is nearer the camera wins: arcs fly in front of rooftops.
-        const arcWins = arcHit && (!hit || arcHit.distance < hit.distance);
+        const arcWins =
+          arcHit && !hit?.object.userData.labelHit && (!hit || arcHit.distance < hit.distance);
         const nextId = arcWins ? null : (hit?.object.userData.nodeId ?? null);
         const nextFlowIndex = arcWins ? (arcHit.object.userData.flowIndex as number) : null;
         if (nextId === engine.hoveredId && nextFlowIndex === engine.hoveredFlowIndex) return;
