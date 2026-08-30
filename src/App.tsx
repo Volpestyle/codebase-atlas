@@ -1990,7 +1990,7 @@ function App() {
             </>
           ) : view === "map" ? (
             <>
-              Drag to orbit · click a district to go there · click it again to look inside · <kbd>esc</kbd> backs out · <kbd>/</kbd> search · <kbd>0</kbd> reset
+              Drag to orbit · click a district to go there · click an arc to see what crosses it · <kbd>esc</kbd> backs out · <kbd>/</kbd> search · <kbd>0</kbd> reset
             </>
           ) : (
             <>

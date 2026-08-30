@@ -34,6 +34,7 @@ import {
 } from "./placeNames";
 import { nodeGlyph } from "./location";
 import { mapPalette, type MapPalette } from "./ui/theme";
+import RoutePanel from "./RoutePanel";
 
 const MAX_FILE_LABELS = 48;
 const MAX_DISTRICT_LABELS = 48;
@@ -80,6 +81,8 @@ interface ImportVisual {
   source: string;
   target: string;
   weight: number;
+  /** Bindings crossing this route, carried through aggregation. */
+  symbols: string[];
   /** This arc's weight relative to the heaviest arc in the layout, 0..1. */
   weightRatio: number;
   artery: boolean;
@@ -92,6 +95,7 @@ interface HoveredFlow {
   source: RepositoryNode;
   target: RepositoryNode;
   weight: number;
+  symbols: string[];
 }
 
 interface SceneEngine {
@@ -321,6 +325,7 @@ function populateLayout(engine: SceneEngine, layout: RepositoryLayout) {
       source: flow.source,
       target: flow.target,
       weight: flow.weight,
+      symbols: flow.symbols,
       weightRatio,
       artery: arteries.has(flowKey(flow)),
       group: arc,
@@ -435,6 +440,8 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
     const animateCameraRef = useRef(animateCamera);
     const [hoveredNode, setHoveredNode] = useState<RepositoryNode | null>(null);
     const [hoveredFlow, setHoveredFlow] = useState<HoveredFlow | null>(null);
+    // A clicked arc stays open; the hover readout only lasts while pointed at.
+    const [openFlow, setOpenFlow] = useState<HoveredFlow | null>(null);
     const [sceneError, setSceneError] = useState<string | null>(null);
 
     const revealedKey = useMemo(
@@ -701,7 +708,12 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
         const flowTarget = flow ? engine.visuals.get(flow.target)?.node : null;
         setHoveredFlow(
           flow && flowSource && flowTarget
-            ? { source: flowSource, target: flowTarget, weight: flow.weight }
+            ? {
+                source: flowSource,
+                target: flowTarget,
+                weight: flow.weight,
+                symbols: flow.symbols,
+              }
             : null,
         );
         updateVisuals();
@@ -796,8 +808,34 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
       function handlePointerUp(event: PointerEvent) {
         if (Math.hypot(event.clientX - pointerDown.x, event.clientY - pointerDown.y) > 5) return;
         const hit = pointFromEvent(event);
+        // An arc in front of a rooftop takes the click, matching what the
+        // hover readout was already reporting under the pointer.
+        const arcHit = raycaster
+          .intersectObjects(engine.arcTargets, false)
+          .find((candidate) => candidate.object.parent?.visible);
+        if (
+          arcHit &&
+          !hit?.object.userData.labelHit &&
+          (!hit || arcHit.distance < hit.distance)
+        ) {
+          const flow = engine.importVisuals[arcHit.object.userData.flowIndex as number];
+          const source = flow ? engine.visuals.get(flow.source)?.node : null;
+          const target = flow ? engine.visuals.get(flow.target)?.node : null;
+          if (flow && source && target) {
+            setOpenFlow({
+              source,
+              target,
+              weight: flow.weight,
+              symbols: flow.symbols,
+            });
+            return;
+          }
+        }
         const nextId = hit?.object.userData.nodeId ?? null;
-        if (nextId) onSelectRef.current(nextId);
+        if (nextId) {
+          setOpenFlow(null);
+          onSelectRef.current(nextId);
+        }
       }
 
       function handlePointerLeave() {
@@ -944,7 +982,18 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
             <strong>
               {hoveredFlow.source.name} → {hoveredFlow.target.name}
             </strong>
+            <p className="scene-readout-summary">Click the arc to see what crosses it.</p>
           </div>
+        ) : null}
+        {openFlow ? (
+          <RoutePanel
+            source={{ id: openFlow.source.id, label: openFlow.source.path }}
+            target={{ id: openFlow.target.id, label: openFlow.target.path }}
+            weight={openFlow.weight}
+            symbols={openFlow.symbols}
+            onSelect={(id) => onSelect(id)}
+            onClose={() => setOpenFlow(null)}
+          />
         ) : null}
         {layout.modules.length < graph.nodes.length ? (
           <p className="render-cap" title="The complete repository remains available in the module list.">

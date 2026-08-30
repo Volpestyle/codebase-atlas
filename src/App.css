@@ -1870,7 +1870,7 @@ body.is-resizing-panels * {
 }
 
 /* What crosses one route, docked clear of the minimap. */
-.flow-route {
+.route-panel {
   position: absolute;
   z-index: 6;
   top: 168px;
@@ -1886,14 +1886,14 @@ body.is-resizing-panels * {
   backdrop-filter: blur(2px);
 }
 
-.flow-route-head {
+.route-panel-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
 }
 
-.flow-route-head button {
+.route-panel-head button {
   padding: 1px 5px;
   border: 1px solid var(--hairline);
   background: var(--paper-light);
@@ -1901,14 +1901,14 @@ body.is-resizing-panels * {
   font-size: var(--fs-small);
 }
 
-.flow-route-pair {
+.route-panel-pair {
   margin: 6px 0 10px;
   font-size: var(--fs-small);
   line-height: 1.5;
   word-break: break-all;
 }
 
-.flow-route-pair button {
+.route-panel-pair button {
   padding: 0;
   background: none;
   color: var(--ink);
@@ -1918,11 +1918,11 @@ body.is-resizing-panels * {
   text-decoration-color: var(--hairline);
 }
 
-.flow-route-pair button:hover {
+.route-panel-pair button:hover {
   color: var(--rust);
 }
 
-.flow-route-symbols {
+.route-panel-symbols {
   display: flex;
   flex-wrap: wrap;
   gap: 3px 4px;
@@ -1931,7 +1931,7 @@ body.is-resizing-panels * {
   list-style: none;
 }
 
-.flow-route-symbols li {
+.route-panel-symbols li {
   padding: 1px 5px;
   border: 1px solid var(--rust-line);
   background: var(--rust-wash);
@@ -1939,7 +1939,7 @@ body.is-resizing-panels * {
   font-size: var(--fs-label);
 }
 
-.flow-route-empty {
+.route-panel-empty {
   margin: 5px 0 0;
   color: var(--olive);
   font-family: var(--font-serif);
@@ -1993,7 +1993,7 @@ body.is-resizing-panels * {
 }
 
 /* What crosses one route, docked clear of the minimap. */
-.flow-route {
+.route-panel {
   position: absolute;
   z-index: 6;
   top: 168px;
@@ -2009,14 +2009,14 @@ body.is-resizing-panels * {
   backdrop-filter: blur(2px);
 }
 
-.flow-route-head {
+.route-panel-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
 }
 
-.flow-route-head button {
+.route-panel-head button {
   padding: 1px 5px;
   border: 1px solid var(--hairline);
   background: var(--paper-light);
@@ -2024,14 +2024,14 @@ body.is-resizing-panels * {
   font-size: var(--fs-small);
 }
 
-.flow-route-pair {
+.route-panel-pair {
   margin: 6px 0 10px;
   font-size: var(--fs-small);
   line-height: 1.5;
   word-break: break-all;
 }
 
-.flow-route-pair button {
+.route-panel-pair button {
   padding: 0;
   background: none;
   color: var(--ink);
@@ -2041,11 +2041,11 @@ body.is-resizing-panels * {
   text-decoration-color: var(--hairline);
 }
 
-.flow-route-pair button:hover {
+.route-panel-pair button:hover {
   color: var(--rust);
 }
 
-.flow-route-symbols {
+.route-panel-symbols {
   display: flex;
   flex-wrap: wrap;
   gap: 3px 4px;
@@ -2054,7 +2054,7 @@ body.is-resizing-panels * {
   list-style: none;
 }
 
-.flow-route-symbols li {
+.route-panel-symbols li {
   padding: 1px 5px;
   border: 1px solid var(--rust-line);
   background: var(--rust-wash);
@@ -2062,7 +2062,7 @@ body.is-resizing-panels * {
   font-size: var(--fs-label);
 }
 
-.flow-route-empty {
+.route-panel-empty {
   margin: 5px 0 0;
   color: var(--olive);
   font-family: var(--font-serif);
@@ -2099,7 +2099,7 @@ body.is-resizing-panels * {
 }
 
 /* What crosses one route, docked clear of the minimap. */
-.flow-route {
+.route-panel {
   position: absolute;
   z-index: 6;
   top: 168px;
@@ -2115,14 +2115,14 @@ body.is-resizing-panels * {
   backdrop-filter: blur(2px);
 }
 
-.flow-route-head {
+.route-panel-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
 }
 
-.flow-route-head button {
+.route-panel-head button {
   padding: 1px 5px;
   border: 1px solid var(--hairline);
   background: var(--paper-light);
@@ -2130,14 +2130,14 @@ body.is-resizing-panels * {
   font-size: var(--fs-small);
 }
 
-.flow-route-pair {
+.route-panel-pair {
   margin: 6px 0 10px;
   font-size: var(--fs-small);
   line-height: 1.5;
   word-break: break-all;
 }
 
-.flow-route-pair button {
+.route-panel-pair button {
   padding: 0;
   background: none;
   color: var(--ink);
@@ -2147,11 +2147,11 @@ body.is-resizing-panels * {
   text-decoration-color: var(--hairline);
 }
 
-.flow-route-pair button:hover {
+.route-panel-pair button:hover {
   color: var(--rust);
 }
 
-.flow-route-symbols {
+.route-panel-symbols {
   display: flex;
   flex-wrap: wrap;
   gap: 3px 4px;
@@ -2160,7 +2160,7 @@ body.is-resizing-panels * {
   list-style: none;
 }
 
-.flow-route-symbols li {
+.route-panel-symbols li {
   padding: 1px 5px;
   border: 1px solid var(--rust-line);
   background: var(--rust-wash);
@@ -2168,7 +2168,7 @@ body.is-resizing-panels * {
   font-size: var(--fs-label);
 }
 
-.flow-route-empty {
+.route-panel-empty {
   margin: 5px 0 0;
   color: var(--olive);
   font-family: var(--font-serif);
@@ -2208,7 +2208,7 @@ body.is-resizing-panels * {
 }
 
 /* What crosses one route, docked clear of the minimap. */
-.flow-route {
+.route-panel {
   position: absolute;
   z-index: 6;
   top: 168px;
@@ -2224,14 +2224,14 @@ body.is-resizing-panels * {
   backdrop-filter: blur(2px);
 }
 
-.flow-route-head {
+.route-panel-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
 }
 
-.flow-route-head button {
+.route-panel-head button {
   padding: 1px 5px;
   border: 1px solid var(--hairline);
   background: var(--paper-light);
@@ -2239,14 +2239,14 @@ body.is-resizing-panels * {
   font-size: var(--fs-small);
 }
 
-.flow-route-pair {
+.route-panel-pair {
   margin: 6px 0 10px;
   font-size: var(--fs-small);
   line-height: 1.5;
   word-break: break-all;
 }
 
-.flow-route-pair button {
+.route-panel-pair button {
   padding: 0;
   background: none;
   color: var(--ink);
@@ -2256,11 +2256,11 @@ body.is-resizing-panels * {
   text-decoration-color: var(--hairline);
 }
 
-.flow-route-pair button:hover {
+.route-panel-pair button:hover {
   color: var(--rust);
 }
 
-.flow-route-symbols {
+.route-panel-symbols {
   display: flex;
   flex-wrap: wrap;
   gap: 3px 4px;
@@ -2269,7 +2269,7 @@ body.is-resizing-panels * {
   list-style: none;
 }
 
-.flow-route-symbols li {
+.route-panel-symbols li {
   padding: 1px 5px;
   border: 1px solid var(--rust-line);
   background: var(--rust-wash);
@@ -2277,7 +2277,7 @@ body.is-resizing-panels * {
   font-size: var(--fs-label);
 }
 
-.flow-route-empty {
+.route-panel-empty {
   margin: 5px 0 0;
   color: var(--olive);
   font-family: var(--font-serif);

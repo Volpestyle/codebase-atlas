@@ -10,6 +10,7 @@ import {
 } from "./flowLayout";
 import type { ImportFlow } from "./repositoryLayout";
 import RepositoryScene from "./RepositoryScene";
+import RoutePanel from "./RoutePanel";
 
 interface FlowSceneProps {
   graph: RepositoryGraph;
@@ -475,41 +476,14 @@ function FlowScene({ graph, selectedId, searchQuery, maxDepth, onSelect }: FlowS
       </div>
 
       {openFlow ? (
-        <aside className="flow-route" aria-label="Selected import route">
-          <div className="flow-route-head">
-            <span className="section-index">Route · {openFlow.weight} imports</span>
-            <button
-              type="button"
-              onClick={() => setOpenEdge(null)}
-              aria-label="Close route"
-            >
-              ✕
-            </button>
-          </div>
-          <p className="flow-route-pair">
-            <button type="button" onClick={() => onSelect(openFlow.source)}>
-              {openFlow.source}
-            </button>
-            <span aria-hidden="true"> → </span>
-            <button type="button" onClick={() => onSelect(openFlow.target)}>
-              {openFlow.target}
-            </button>
-          </p>
-          {openFlow.symbols.length > 0 ? (
-            <>
-              <span className="section-index">What crosses</span>
-              <ul className="flow-route-symbols">
-                {openFlow.symbols.map((symbol) => (
-                  <li key={symbol}>{symbol}</li>
-                ))}
-              </ul>
-            </>
-          ) : (
-            <p className="flow-route-empty">
-              Nothing named crosses this route — side-effect or dynamic imports only.
-            </p>
-          )}
-        </aside>
+        <RoutePanel
+          source={{ id: openFlow.source, label: openFlow.source }}
+          target={{ id: openFlow.target, label: openFlow.target }}
+          weight={openFlow.weight}
+          symbols={openFlow.symbols}
+          onSelect={onSelect}
+          onClose={() => setOpenEdge(null)}
+        />
       ) : null}
 
       {selectedNode ? (
