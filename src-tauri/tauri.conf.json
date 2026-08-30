@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "identifier": "app.codebaseatlas.desktop",
   "build": {
+    "features": ["app"],
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run build",

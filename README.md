@@ -1,6 +1,6 @@
 # Codebase Atlas
 
-Codebase Atlas is a read-only visualizer for local directories and public GitHub repositories. It renders repository structure as an interactive orthographic 3D field with searchable modules, language statistics, import flow arcs, layer controls, and a synchronized inspector.
+Codebase Atlas is a read-only repository graph engine with a Rust API, CLI, HTTP API, and interactive visualizer for local directories and public GitHub repositories. The visualizer renders repository structure as an orthographic 3D field with searchable modules, language statistics, import flow arcs, layer controls, and a synchronized inspector.
 
 The application runs as a web app, a Tauri 2 desktop app on macOS, Windows, and Linux, and a Tauri iOS app on iPhone and iPad. It uses React 19, TypeScript, and Three.js.
 
@@ -8,12 +8,13 @@ The application runs as a web app, a Tauri 2 desktop app on macOS, Windows, and 
 
 ```mermaid
 flowchart LR
-    A[Native directory picker] --> B[Tauri scan_repository command]
-    L[Public GitHub URL] --> M[GitHub repository + recursive Trees APIs]
-    S[Share / serve companion] --> T[HTTP /v1 on LAN or Tailscale]
-    Ipad[iPad or browser] --> T
-    T --> B
-    B --> C[Rust scanner]
+    CLI[atlas CLI] --> API[codebase_atlas_lib API]
+    HTTP[HTTP /v1 API] --> API
+    Tauri[Tauri commands] --> API
+    UI[React UI] --> Tauri
+    UI --> HTTP
+    UI --> GH[Browser GitHub adapter]
+    API --> C[Rust scanner]
     C --> D[gitignore-aware traversal]
     C --> E[file classification and metrics]
     C --> F[Git branch detection]
@@ -24,24 +25,23 @@ flowchart LR
     F --> G
     O --> G
     R --> G
-    M --> N[Browser GitHub adapter]
-    N --> G
-    G --> H[React application shell]
-    H --> I[Searchable module index]
-    H --> J[Three.js orthographic scene]
-    H --> P[SVG import flow diagram]
-    H --> K[Node inspector]
+    GH --> G
+    G --> I[Searchable module index]
+    G --> J[Three.js orthographic scene]
+    G --> P[SVG import flow diagram]
+    G --> K[Node inspector]
     I <--> J
     I <--> P
     J <--> K
     P <--> K
 ```
 
-Local scans, GitHub trees, exported maps, and the companion protocol all produce the same serializable `RepositoryGraph`. The native layer receives one local path; the browser adapter receives one public GitHub URL; the companion receives a pairing code and a shared path from an iPad or other device on the same Wi-Fi or Tailscale network. None of those sources send file contents into the scene.
+`codebase_atlas_lib` is the product boundary. Its public `scan` and `scan_json` functions produce the canonical serializable `RepositoryGraph`; the `atlas` CLI, `/v1` HTTP server, and Tauri commands are thin adapters over that API. The core/API/CLI is the default Cargo build and has no Tauri runtime dependency; Tauri enables the `app` feature for the desktop and mobile wrapper. React renders graphs and owns interaction state, but it does not scan local repositories. The browser-only GitHub adapter produces the same graph contract from GitHub's public repository and recursive Trees APIs. None of these sources send file contents into the scene.
 
 ## Design Decisions
 
-- **Companion over LAN or Tailscale:** the iPad app does not clone repositories. The desktop app (Share) or `serve` binary listens on port 7420, advertises Wi-Fi and Tailscale addresses, and returns the same scan graph the desktop would draw. A pairing code gates catalog and scan; requested paths must sit under a folder the host has shared. HTTP on the tailnet is still encrypted by Tailscale; on local Wi-Fi the token is the access control. iPad connects with **Computer** — hostname.local, a LAN IP, or a Tailscale name / `100.x` address.
+- **Core-first adapters:** local repository analysis lives in the Rust library API. CLI, HTTP, and Tauri translate their input into that API and return its graph unchanged. This keeps agents, shell scripts, paired devices, and the desktop UI on one implementation instead of allowing the UI to become the product backend.
+- **Companion over LAN or Tailscale:** the iPad app does not clone repositories. The desktop app (Share) or `atlas serve` listens on port 7420, advertises Wi-Fi and Tailscale addresses, and returns the same scan graph the desktop would draw. A pairing code gates catalog and scan; requested paths must sit under a folder the host has shared. HTTP on the tailnet is still encrypted by Tailscale; on local Wi-Fi the token is the access control. iPad connects with **Computer** — hostname.local, a LAN IP, or a Tailscale name / `100.x` address.
 - **Native scanning:** Rust owns filesystem traversal so directory access remains outside the webview and behaves consistently across desktop platforms.
 - **Native GitHub hierarchy:** the web source uses GitHub's repository and recursive Trees APIs rather than cloning repositories or proxying source through another server.
 - **Source-control-aware traversal:** the `ignore` crate applies `.gitignore`, `.ignore`, global Git excludes, and common generated-directory exclusions. A hand-written ignore parser would be less correct.
@@ -54,7 +54,7 @@ Local scans, GitHub trees, exported maps, and the companion protocol all produce
 - **Flow stays detailed:** when the depth slider's level yields fewer than 12 flow modules, the flow view deepens on its own until the diagram says something, and labels the deeper level as "auto detail". The slider is a floor, not a ceiling. Hover tracing exists only on pointer devices; on touch (iPad), tapping a chip drives the same trace through selection.
 - **Direct Three.js integration:** the scene uses Three.js without another rendering framework. React owns application state; Three.js owns the imperative scene lifecycle.
 - **Deterministic layout:** sorted scan output and a stable layout produce the same map for the same repository state.
-- **Position encodes containment:** the map is a nested squarified treemap — each directory is a district whose footprint contains its children, with area proportional to subtree code volume and alternating tones by nesting level. Hierarchy needs no drawn lines, so the only edges in the scene are import arcs. District name tags keep the field orientable: platforms whose children are rendered carry a floating paper region tag, unpacked leaf districts carry a tag on their slab, and tiny footprints stay untagged so labels never outnumber shapes. Tags look through wrapper directories (`src`, `lib`) and skip support directories (`test`, `fixtures`) the way flow chips do, so the field names real places instead of the same SRC/TEST pair on every plate.
+- **Position encodes containment:** the map is a nested squarified treemap — each directory is a district whose footprint contains its children, with area proportional to subtree code volume and alternating tones by nesting level. Hierarchy needs no drawn lines, so the only edges in the scene are import arcs. District name tags keep the field orientable: platforms whose children are rendered carry a floating paper region tag, unpacked leaf districts carry a tag on their slab, and tiny footprints stay untagged so labels never outnumber shapes. Tags look through wrapper directories (`src`, `lib`) and skip support directories (`test`, `fixtures`) the way flow chips do, so the field names real places instead of the same SRC/TEST pair on every plate. A tag is a handle on the place it names: hover or click one to select that district, even where it floats clear of its own footprint. Only the tag's ink takes the pointer, so the transparent margin around it never blocks the map behind.
 - **Area is weighted code volume, not raw size:** source and documentation lines count in full, config and serialized data lines are quartered, and binary assets contribute only a small bounded presence weight — a folder of images or JSON exports cannot dominate the map. The inspector still reports exact raw bytes and lines.
 - **Codebase-index summaries:** when a repository carries a `.codebase-index/` markdown mirror, local scans attach each entry's leading summary to its node — the inspector shows what a module *is*, and search matches summary text, making queries semantic. The mirror itself stays out of the map, and a warning notes when the index is behind `HEAD`.
 - **Facts and prose are separate layers:** the scanner produces facts — structure, metrics, import edges, crossing bindings, declarations — which are deterministic, cost a parse, and are exactly as current as the last scan. `.codebase-index/` produces prose, which describes intent no parse can recover but is written by a model and drifts from `HEAD`. Keeping them apart is why an arc's annotation can be trusted while a summary carries a staleness warning: nothing derivable is written down, and nothing written down is presented as derived.
@@ -86,15 +86,52 @@ flowchart TD
   T --> F[FlowScene SVG<br/>styled via classes]
 ```
 
+## CLI and HTTP API
+
+Install the unified CLI from the checkout, then use `atlas` directly:
+
+```bash
+cargo install --locked --path src-tauri --bin atlas
+atlas --help
+atlas scan . > codebase-atlas.atlas.json
+atlas scan --pretty --output map.atlas.json /path/to/repository
+```
+
+`atlas scan` writes only `RepositoryGraph` JSON to stdout. `--output` writes the same payload to a file. Usage errors exit 2, scan or I/O failures exit 1, and diagnostics go to stderr, so the command composes safely with shell pipelines and agent tooling.
+
+`atlas serve` exposes the same scan API over HTTP for other machines and long-running agents:
+
+```bash
+# Terminal 1
+atlas serve --token ATLAS234 /path/to/repository
+
+# Terminal 2
+curl http://127.0.0.1:7420/v1/health
+curl -H 'Authorization: Bearer ATLAS234' http://127.0.0.1:7420/v1/catalog
+curl -H 'Authorization: Bearer ATLAS234' \
+  -H 'Content-Type: application/json' \
+  --data '{"path":"/path/to/repository"}' \
+  http://127.0.0.1:7420/v1/scan
+```
+
+The server writes one startup-status JSON object to stdout and human-readable addresses, pairing QR code, and diagnostics to stderr. `/v1/health` is public; `/v1/catalog` and `/v1/scan` require the bearer pairing code, and scan paths are restricted to the roots passed to `atlas serve`.
+
+The library API is the same boundary for native callers:
+
+```rust
+let graph = codebase_atlas_lib::scan(std::path::Path::new("."))?;
+let json = codebase_atlas_lib::scan_json(std::path::Path::new("."), false)?;
+```
+
 ## Interaction
 
 - Select **Scan directory** on the desktop to choose a repository.
 - Select **Share** on the desktop to accept connections from this Wi-Fi or Tailscale network. The dialog shows a QR code, pairing code, and reachable addresses. Folders you scan are shared automatically; **Share folder** adds another root (a parent like `~/dev` lists the projects inside it).
 - Select **Computer** on iPhone or iPad (or in the browser). The fastest path is to scan the QR code from the computer’s Share dialog — iOS Camera, or **Scan pairing code** inside the app. The catalog is the computer’s shared folders; choosing one runs the scan on the computer and draws the full-fidelity map here.
-- Headless equivalent: `cargo run --manifest-path src-tauri/Cargo.toml --bin serve -- /path/to/repo`.
+- Headless equivalent: `cargo run --manifest-path src-tauri/Cargo.toml --bin atlas -- serve /path/to/repo`.
 - Select **GitHub URL** and enter a public repository URL in either the web or desktop app.
 - Select **Save map** to export the current graph as a `.atlas.json` file, and **Open map** anywhere to load one. A map exported from a desktop scan carries everything the scan saw — annotated import edges, declarations, line counts, and codebase-index summaries — so a snapshot can still travel by AirDrop when the computer is offline.
-- A map placed at `public/maps/default.atlas.json` is bundled into the build and loads automatically when no other source is saved — generate one headlessly with `cargo run --manifest-path src-tauri/Cargo.toml --bin scan -- <repository> public/maps/default.atlas.json`. Bundled maps are snapshots (rebuild to refresh) and stay out of git.
+- A map placed at `public/maps/default.atlas.json` is bundled into the build and loads automatically when no other source is saved — generate one headlessly with `cargo run --manifest-path src-tauri/Cargo.toml --bin atlas -- scan --output public/maps/default.atlas.json <repository>`. Bundled maps are snapshots (rebuild to refresh) and stay out of git.
 - Drag to orbit, secondary-drag to pan, and scroll to zoom.
 - Hover a module on the map to read its name and, when a `.codebase-index` summary exists, what it is — without leaving the field. Selecting a module centers it and lights its connections at the current survey grain without changing the current zoom or opening it; clicking the selection again decomposes it into its children. Selecting anything outside the opened district closes it, as do `Esc` and the ✕ close button in the toolbar — one district decomposed at a time. Map and flow share the selection, so flow traces the nearest chip and returning to the map keeps that place selected and centered. The inspector lists what the module contains, what it declares, what it imports, and what imports it — each import partner named alongside the bindings that actually cross to it. Press `0` or Reset to return to the survey view.
 - Open a district on the map to show its children inside its footprint without moving the survey slider or changing the current zoom. Large districts also unpack on their own: a roomy tile shows its nested modules as a treemap under its name tag. The rest of the map stays at the survey grain. The header trail is the path you opened; the scale ladder names the grain (field, district, folder, file). Function is the next rung and is not in this survey yet. Click a trail crumb or an earlier scale rung to step back out.
@@ -133,7 +170,7 @@ Verification commands:
 npm run build
 npm test
 cargo test --manifest-path src-tauri/Cargo.toml
-cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
 npm run tauri build -- --debug --no-bundle
 ```
 
@@ -154,13 +191,16 @@ src/
   github.ts               GitHub API and tree-to-graph adapter
   model.ts                frontend graph contract and formatting
 src-tauri/src/
-  lib.rs                  Tauri plugins and command registration
+  lib.rs                  public scan API and feature boundary
+  app.rs                  thin Tauri command and lifecycle adapter
+  cli.rs                  unified, scriptable CLI adapter
   scanner.rs              traversal, classification, metrics, tests
   imports.rs              specifier resolution against the scanned tree
   symbols.rs              tree-sitter declaration and import extraction
-  companion.rs            Share / serve HTTP companion
-  bin/scan.rs             headless map export
-  bin/serve.rs            headless companion host
+  companion.rs            authenticated /v1 HTTP adapter
+  bin/atlas.rs             atlas scan / serve entry point
+  bin/scan.rs             compatibility alias for atlas scan
+  bin/serve.rs            compatibility alias for atlas serve
 ```
 
 Repository access is read-only. Local scans read metadata and bounded text files to count lines. GitHub scans make two unauthenticated requests to `api.github.com` and support public repositories only.

@@ -2,7 +2,7 @@
 name = "codebase-atlas"
 version = "0.1.0"
 default-run = "codebase-atlas"
-description = "A desktop visualizer for exploring repository structure and language statistics"
+description = "A scriptable repository graph API, CLI, and visualizer"
 authors = ["James"]
 edition = "2024"
 rust-version = "1.85"
@@ -14,8 +14,22 @@ rust-version = "1.85"
 name = "codebase_atlas_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[[bin]]
+name = "codebase-atlas"
+path = "src/main.rs"
+required-features = ["app"]
+
+[features]
+default = []
+app = [
+  "dep:tauri",
+  "dep:tauri-build",
+  "dep:tauri-plugin-deep-link",
+  "dep:tauri-plugin-dialog",
+]
+
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2", features = [], optional = true }
 
 [dependencies]
 getrandom = "0.2"
@@ -24,9 +38,9 @@ ignore = "0.4"
 qrcode = { version = "0.14", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tauri = { version = "2", features = [] }
-tauri-plugin-deep-link = "2.4.9"
-tauri-plugin-dialog = "2"
+tauri = { version = "2", features = [], optional = true }
+tauri-plugin-deep-link = { version = "2.4.9", optional = true }
+tauri-plugin-dialog = { version = "2", optional = true }
 tiny_http = "0.12"
 tree-sitter = "0.26.13"
 tree-sitter-javascript = "0.25.0"

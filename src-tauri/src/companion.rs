@@ -1,4 +1,4 @@
-//! LAN / Tailscale companion: the desktop (or `serve` binary) scans local
+//! LAN / Tailscale companion: the desktop (or `atlas serve`) scans local
 //! repositories; an iPhone, iPad, or browser fetches the same graph over HTTP.
 //!
 //! Pairing is a bearer token. Scan paths must canonicalize under a shared
@@ -7,12 +7,12 @@
 
 use std::{
     fs,
-    io::Read,
+    io::{Read, Write},
     net::{Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
     },
     thread,
     time::Duration,
@@ -43,6 +43,7 @@ const GENERATED_DIRECTORY_NAMES: &[&str] = &[
     "DerivedData",
 ];
 
+#[cfg(feature = "app")]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CompanionStatus {
@@ -80,6 +81,7 @@ pub struct CompanionRoot {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg(feature = "app")]
 struct PersistedConfig {
     enabled: bool,
     port: u16,
@@ -96,10 +98,29 @@ struct LiveContext {
 
 struct LiveServer {
     stop: Arc<AtomicBool>,
-    thread: thread::JoinHandle<()>,
+    thread: Option<thread::JoinHandle<()>>,
     bound: SocketAddr,
 }
 
+impl Drop for LiveServer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Ok(mut stream) = std::net::TcpStream::connect_timeout(
+            &wakeup_addr(self.bound),
+            Duration::from_millis(400),
+        ) {
+            let _ = stream.write_all(
+                b"GET /v1/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            );
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+#[cfg(feature = "app")]
 pub struct CompanionControl {
     config_path: PathBuf,
     config: Mutex<PersistedConfig>,
@@ -121,7 +142,8 @@ struct AtlasResponse {
 
 impl AtlasResponse {
     fn json(status: u16, value: &impl Serialize) -> Self {
-        let body = serde_json::to_vec(value).unwrap_or_else(|_| b"{\"error\":\"serialize\"}".to_vec());
+        let body =
+            serde_json::to_vec(value).unwrap_or_else(|_| b"{\"error\":\"serialize\"}".to_vec());
         Self {
             status,
             body,
@@ -186,8 +208,8 @@ fn print_pairing_qr(url: &str) {
     let Ok(code) = qrcode::QrCode::new(url.as_bytes()) else {
         return;
     };
-    println!();
-    println!(
+    eprintln!();
+    eprintln!(
         "{}",
         code.render::<qrcode::render::unicode::Dense1x2>()
             .quiet_zone(true)
@@ -429,10 +451,10 @@ fn authorize(context: &LiveContext, authorization: Option<&str>) -> Result<(), A
 }
 
 fn catalog(context: &LiveContext) -> AtlasResponse {
-    let roots = context.roots.lock().map_or_else(
-        |_| Vec::new(),
-        |guard| guard.clone(),
-    );
+    let roots = context
+        .roots
+        .lock()
+        .map_or_else(|_| Vec::new(), |guard| guard.clone());
     AtlasResponse::json(
         200,
         &serde_json::json!({
@@ -450,19 +472,26 @@ fn scan(context: &LiveContext, body: &[u8]) -> AtlasResponse {
     if request.path.trim().is_empty() {
         return AtlasResponse::error(400, "Send a JSON object with a folder path.");
     }
-    let roots = context.roots.lock().map_or_else(
-        |_| Vec::new(),
-        |guard| guard.clone(),
-    );
+    let roots = context
+        .roots
+        .lock()
+        .map_or_else(|_| Vec::new(), |guard| guard.clone());
     let path = match allowed_path(&roots, Path::new(&request.path)) {
         Ok(path) => path,
         Err(message) => {
-            let status = if message.contains("does not exist") { 404 } else { 403 };
+            let status = if message.contains("does not exist") {
+                404
+            } else {
+                403
+            };
             return AtlasResponse::error(status, &message);
         }
     };
-    let _scan = context.scan_lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    match scanner::scan_repository_path(&path) {
+    let _scan = context
+        .scan_lock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    match crate::scan(&path) {
         Ok(graph) => AtlasResponse::json(200, &graph),
         Err(message) => AtlasResponse::error(400, &message),
     }
@@ -482,8 +511,9 @@ fn cors_headers() -> Vec<Header> {
 
 fn respond(request: Request, atlas: AtlasResponse) {
     let mut response = Response::from_data(atlas.body).with_status_code(StatusCode(atlas.status));
-    let content_type =
-        format!("Content-Type: {}", atlas.content_type).parse::<Header>().expect("content type");
+    let content_type = format!("Content-Type: {}", atlas.content_type)
+        .parse::<Header>()
+        .expect("content type");
     response = response.with_header(content_type);
     for header in cors_headers() {
         response = response.with_header(header);
@@ -520,19 +550,21 @@ fn serve_request(context: &LiveContext, mut request: Request) {
     let path = request.url().to_owned();
     let authorization = request_authorization(&request);
     let mut body = Vec::new();
-    let _ = request.as_reader().take(MAX_BODY_BYTES).read_to_end(&mut body);
-    let atlas = handle_request(
-        context,
-        &method,
-        &path,
-        authorization.as_deref(),
-        &body,
-    );
+    let _ = request
+        .as_reader()
+        .take(MAX_BODY_BYTES)
+        .read_to_end(&mut body);
+    let atlas = handle_request(context, &method, &path, authorization.as_deref(), &body);
     respond(request, atlas);
 }
 
-fn start_on(addr: SocketAddr, context: Arc<LiveContext>, stop: Arc<AtomicBool>) -> Result<LiveServer, String> {
-    let server = Server::http(addr).map_err(|error| format!("Could not listen on {addr}: {error}"))?;
+fn start_on(
+    addr: SocketAddr,
+    context: Arc<LiveContext>,
+    stop: Arc<AtomicBool>,
+) -> Result<LiveServer, String> {
+    let server =
+        Server::http(addr).map_err(|error| format!("Could not listen on {addr}: {error}"))?;
     let bound = server_socket(&server)?;
     let thread_stop = Arc::clone(&stop);
     let thread = thread::spawn(move || {
@@ -544,7 +576,11 @@ fn start_on(addr: SocketAddr, context: Arc<LiveContext>, stop: Arc<AtomicBool>) 
             thread::spawn(move || serve_request(&context, request));
         }
     });
-    Ok(LiveServer { stop, thread, bound })
+    Ok(LiveServer {
+        stop,
+        thread: Some(thread),
+        bound,
+    })
 }
 
 fn server_socket(server: &Server) -> Result<SocketAddr, String> {
@@ -562,20 +598,7 @@ fn wakeup_addr(bound: SocketAddr) -> SocketAddr {
     }
 }
 
-fn stop_server(live: LiveServer) {
-    live.stop.store(true, Ordering::SeqCst);
-    if let Ok(mut stream) =
-        std::net::TcpStream::connect_timeout(&wakeup_addr(live.bound), Duration::from_millis(400))
-    {
-        use std::io::Write;
-        let _ = stream.write_all(
-            b"GET /v1/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
-        );
-        let _ = stream.shutdown(std::net::Shutdown::Write);
-    }
-    let _ = live.thread.join();
-}
-
+#[cfg(feature = "app")]
 impl Default for PersistedConfig {
     fn default() -> Self {
         Self {
@@ -587,6 +610,7 @@ impl Default for PersistedConfig {
     }
 }
 
+#[cfg(feature = "app")]
 impl CompanionControl {
     pub fn load(config_path: PathBuf) -> Self {
         let config = fs::read(&config_path)
@@ -716,7 +740,7 @@ impl CompanionControl {
 
     fn stop_live(&self) {
         if let Some(live) = self.live.lock().expect("companion server").take() {
-            stop_server(live);
+            drop(live);
         }
         *self.context.lock().expect("companion context") = None;
     }
@@ -732,12 +756,15 @@ impl CompanionControl {
     }
 }
 
-/// Blocking companion used by the `serve` binary. Runs until the process is killed.
+/// Blocking HTTP API used by `atlas serve`. Runs until the process is killed.
 ///
 /// # Errors
 ///
 /// Returns a user-facing message when a shared folder cannot be opened or the port is already in use.
 pub fn serve_blocking(port: u16, token: &str, roots: Vec<PathBuf>) -> Result<(), String> {
+    if port == 0 {
+        return Err("Port must be between 1 and 65535.".to_owned());
+    }
     let token = {
         let normalized = normalize_token(token);
         if normalized.is_empty() {
@@ -760,29 +787,42 @@ pub fn serve_blocking(port: u16, token: &str, roots: Vec<PathBuf>) -> Result<(),
         scan_lock: Mutex::new(()),
     });
     let addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, port));
-    let _live = start_on(addr, context, Arc::new(AtomicBool::new(false)))?;
+    let _live = start_on(addr, Arc::clone(&context), Arc::new(AtomicBool::new(false)))?;
     let addresses = advertised_addresses(port);
     let url = pairing_url(&token, &addresses);
-    println!("Codebase Atlas companion");
-    println!("  Protocol      {PROTOCOL}");
-    println!("  Pairing code  {}", display_token(&token));
+    println!(
+        "{}",
+        serde_json::json!({
+            "protocol": PROTOCOL,
+            "token": token,
+            "name": &context.name,
+            "addresses": &addresses,
+            "pairingUrl": &url,
+            "roots": &canonical_roots,
+        })
+    );
+    let _ = std::io::stdout().flush();
+    eprintln!("Codebase Atlas API");
+    eprintln!("  Protocol      {PROTOCOL}");
+    eprintln!("  Pairing code  {}", display_token(&token));
     for address in &addresses {
-        println!("  {:<13} {}", address.label, address.url);
+        eprintln!("  {:<13} {}", address.label, address.url);
     }
     for root in &canonical_roots {
-        println!("  Shared        {}", root.display());
+        eprintln!("  Shared        {}", root.display());
     }
-    println!("  Pairing URL   {url}");
+    eprintln!("  Pairing URL   {url}");
     print_pairing_qr(&url);
-    println!();
-    println!("On iPhone, open Camera and scan this code — or Scan inside Codebase Atlas.");
-    println!("Wi-Fi and Tailscale both work; the tunnel encrypts Tailscale hops.");
-    println!("Press Ctrl+C to stop.");
+    eprintln!();
+    eprintln!("On iPhone, open Camera and scan this code — or Scan inside Codebase Atlas.");
+    eprintln!("Wi-Fi and Tailscale both work; the tunnel encrypts Tailscale hops.");
+    eprintln!("Press Ctrl+C to stop.");
     loop {
         thread::park();
     }
 }
 
+#[cfg(feature = "app")]
 pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     use tauri::Manager;
     let dir = app.path().app_config_dir()?;
@@ -803,6 +843,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     clippy::unnecessary_wraps,
     clippy::missing_errors_doc
 )]
+#[cfg(feature = "app")]
 #[tauri::command]
 pub fn start_companion(
     control: tauri::State<CompanionControl>,
@@ -819,6 +860,7 @@ pub fn start_companion(
     clippy::unnecessary_wraps,
     clippy::missing_errors_doc
 )]
+#[cfg(feature = "app")]
 #[tauri::command]
 pub fn stop_companion(control: tauri::State<CompanionControl>) -> Result<CompanionStatus, String> {
     control.stop();
@@ -830,8 +872,11 @@ pub fn stop_companion(control: tauri::State<CompanionControl>) -> Result<Compani
     clippy::unnecessary_wraps,
     clippy::missing_errors_doc
 )]
+#[cfg(feature = "app")]
 #[tauri::command]
-pub fn companion_status(control: tauri::State<CompanionControl>) -> Result<CompanionStatus, String> {
+pub fn companion_status(
+    control: tauri::State<CompanionControl>,
+) -> Result<CompanionStatus, String> {
     Ok(control.status())
 }
 
@@ -840,6 +885,7 @@ pub fn companion_status(control: tauri::State<CompanionControl>) -> Result<Compa
     clippy::unnecessary_wraps,
     clippy::missing_errors_doc
 )]
+#[cfg(feature = "app")]
 #[tauri::command]
 pub fn share_companion_root(
     control: tauri::State<CompanionControl>,
@@ -854,6 +900,7 @@ pub fn share_companion_root(
     clippy::unnecessary_wraps,
     clippy::missing_errors_doc
 )]
+#[cfg(feature = "app")]
 #[tauri::command]
 pub fn unshare_companion_root(
     control: tauri::State<CompanionControl>,
@@ -951,8 +998,11 @@ mod tests {
         fs::create_dir_all(dir.path().join("notes")).expect("notes");
         fs::write(dir.path().join("notes/readme.md"), "hi\n").expect("notes file");
         fs::create_dir_all(dir.path().join("engine")).expect("engine");
-        fs::write(dir.path().join("engine/Cargo.toml"), "[package]\nname = \"engine\"\n")
-            .expect("engine manifest");
+        fs::write(
+            dir.path().join("engine/Cargo.toml"),
+            "[package]\nname = \"engine\"\n",
+        )
+        .expect("engine manifest");
         let entries = catalog_entries(&[dir.path().to_path_buf()]);
         let names: Vec<_> = entries.iter().map(|entry| entry.name.as_str()).collect();
         assert!(names.contains(&folder_name(dir.path()).as_str()));
@@ -1044,16 +1094,14 @@ mod tests {
             "GET /v1/catalog HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer ABCD2345\r\nConnection: close\r\n\r\n",
         );
         assert!(catalog.contains(&folder_name(dir.path())), "{catalog}");
-        stop_server(live);
+        drop(live);
     }
 
     fn raw_http(addr: SocketAddr, request: &str) -> String {
         use std::io::Write;
         let mut stream = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(2))
             .expect("connect companion");
-        stream
-            .write_all(request.as_bytes())
-            .expect("write request");
+        stream.write_all(request.as_bytes()).expect("write request");
         stream
             .shutdown(std::net::Shutdown::Write)
             .expect("shutdown write");

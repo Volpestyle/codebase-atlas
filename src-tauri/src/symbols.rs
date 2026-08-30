@@ -258,12 +258,18 @@ fn ts_declaration(node: Node<'_>, source: &str, exported: bool, out: &mut Vec<Sy
                 if name.kind() != "identifier" {
                     continue;
                 }
-                let bound_to_function = declarator.child_by_field_name("value").is_some_and(|value| {
-                    matches!(
-                        value.kind(),
-                        "arrow_function" | "function_expression" | "function" | "generator_function"
-                    )
-                });
+                let bound_to_function =
+                    declarator
+                        .child_by_field_name("value")
+                        .is_some_and(|value| {
+                            matches!(
+                                value.kind(),
+                                "arrow_function"
+                                    | "function_expression"
+                                    | "function"
+                                    | "generator_function"
+                            )
+                        });
                 out.push(Symbol {
                     name: text_of(name, source).to_owned(),
                     kind: if bound_to_function {
@@ -594,7 +600,10 @@ use prelude::*;
                 "super::scanner::ScanState",
             ]
         );
-        assert_eq!(names_for(&facts, "super::scanner::ScanState"), ["ScanState"]);
+        assert_eq!(
+            names_for(&facts, "super::scanner::ScanState"),
+            ["ScanState"]
+        );
         assert_eq!(names_for(&facts, "other_crate::Thing"), ["Thing"]);
         assert_eq!(names_for(&facts, "prelude"), ["*"]);
         assert!(names_for(&facts, "crate::imports").is_empty());

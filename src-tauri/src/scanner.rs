@@ -137,12 +137,6 @@ struct ScanState {
     truncated: bool,
 }
 
-/// Writes an exported map file chosen through the save dialog.
-#[tauri::command]
-pub(crate) fn save_map(path: String, contents: String) -> Result<(), String> {
-    fs::write(path, contents).map_err(|error| format!("Could not save the map file: {error}"))
-}
-
 /// Walks `path` into a serializable repository graph.
 ///
 /// # Errors
@@ -339,7 +333,8 @@ impl ScanState {
             }
         } else if name == "Cargo.toml" {
             if let Some(package) = imports::cargo_package_name(text) {
-                self.cargo_crates.insert(package.replace('-', "_"), directory);
+                self.cargo_crates
+                    .insert(package.replace('-', "_"), directory);
             }
         }
         Vec::new()
@@ -372,7 +367,10 @@ impl ScanState {
                         .filter(|name| name.as_str() != module_name)
                         .cloned()
                         .collect();
-                    pairs.entry((source.clone(), target)).or_default().extend(names);
+                    pairs
+                        .entry((source.clone(), target))
+                        .or_default()
+                        .extend(names);
                 }
             }
         }
@@ -823,16 +821,22 @@ mod tests {
         fs::create_dir_all(root.join("web")).expect("create web package");
         fs::create_dir_all(root.join("lib")).expect("create lib package");
         fs::create_dir_all(root.join("engine/src")).expect("create engine crate");
-        fs::write(root.join("web/package.json"), "{\"name\": \"@atlas/web\"}\n")
-            .expect("write web manifest");
+        fs::write(
+            root.join("web/package.json"),
+            "{\"name\": \"@atlas/web\"}\n",
+        )
+        .expect("write web manifest");
         fs::write(
             root.join("web/index.ts"),
             "import { u } from \"./util\";\nimport lib from \"@atlas/lib\";\nimport external from \"react\";\n",
         )
         .expect("write web entry");
         fs::write(root.join("web/util.ts"), "export const u = 1;\n").expect("write web util");
-        fs::write(root.join("lib/package.json"), "{\"name\": \"@atlas/lib\"}\n")
-            .expect("write lib manifest");
+        fs::write(
+            root.join("lib/package.json"),
+            "{\"name\": \"@atlas/lib\"}\n",
+        )
+        .expect("write lib manifest");
         fs::write(root.join("lib/index.ts"), "export default 1;\n").expect("write lib entry");
         fs::write(
             root.join("engine/Cargo.toml"),
@@ -844,8 +848,11 @@ mod tests {
             "use crate::scan::Scanner;\nuse std::fs;\nmod scan;\nmod util;\n",
         )
         .expect("write engine root");
-        fs::write(root.join("engine/src/scan.rs"), "use super::util::helper;\n")
-            .expect("write engine scan");
+        fs::write(
+            root.join("engine/src/scan.rs"),
+            "use super::util::helper;\n",
+        )
+        .expect("write engine scan");
         fs::write(root.join("engine/src/util.rs"), "pub fn helper() {}\n")
             .expect("write engine util");
         fs::create_dir_all(root.join(".codebase-index/web")).expect("create index directory");
@@ -886,7 +893,12 @@ mod tests {
                 .find(|node| node.id == id)
                 .unwrap_or_else(|| panic!("node {id}"))
         };
-        assert!(!graph.nodes.iter().any(|node| node.id.starts_with(".codebase-index")));
+        assert!(
+            !graph
+                .nodes
+                .iter()
+                .any(|node| node.id.starts_with(".codebase-index"))
+        );
         assert_eq!(
             by_id(".").description.as_deref(),
             Some("A test workspace with web and engine halves. It exists for the scanner tests."),

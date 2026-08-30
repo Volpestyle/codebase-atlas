@@ -86,7 +86,10 @@ impl<'a> ImportResolver<'a> {
             return Some(path.to_owned());
         }
         // ESM-style "./x.js" refers to a compiled sibling of x.ts.
-        if let Some(stem) = path.strip_suffix(".js").or_else(|| path.strip_suffix(".jsx")) {
+        if let Some(stem) = path
+            .strip_suffix(".js")
+            .or_else(|| path.strip_suffix(".jsx"))
+        {
             for extension in ["ts", "tsx"] {
                 let candidate = format!("{stem}.{extension}");
                 if self.is_file(&candidate) {
@@ -209,7 +212,8 @@ impl<'a> ImportResolver<'a> {
 }
 
 fn parent_dir(id: &str) -> String {
-    id.rfind('/').map_or_else(String::new, |i| id[..i].to_owned())
+    id.rfind('/')
+        .map_or_else(String::new, |i| id[..i].to_owned())
 }
 
 /// Directory whose children are the file's submodules.
@@ -306,19 +310,32 @@ mod tests {
         let resolver = ImportResolver::new(&nodes, &npm, &cargo);
 
         let ts = |file: &str, spec: &str| resolver.resolve(ImportLanguage::TsJs, file, spec);
-        assert_eq!(ts("app/src/main.ts", "./util"), Some("app/src/util.ts".to_owned()));
-        assert_eq!(ts("app/src/main.ts", "./util.js"), Some("app/src/util.ts".to_owned()));
+        assert_eq!(
+            ts("app/src/main.ts", "./util"),
+            Some("app/src/util.ts".to_owned())
+        );
+        assert_eq!(
+            ts("app/src/main.ts", "./util.js"),
+            Some("app/src/util.ts".to_owned())
+        );
         assert_eq!(
             ts("app/src/main.ts", "./widgets"),
             Some("app/src/widgets/index.ts".to_owned()),
         );
-        assert_eq!(ts("app/src/main.ts", "@app/pkg"), Some("pkg/index.ts".to_owned()));
+        assert_eq!(
+            ts("app/src/main.ts", "@app/pkg"),
+            Some("pkg/index.ts".to_owned())
+        );
         assert_eq!(ts("app/src/main.ts", "react"), None);
         assert_eq!(
             ts("app/src/main.ts", "../worker"),
             Some("app/worker".to_owned())
         );
-        assert_eq!(ts("app/src/util.ts", "./util"), None, "self-imports are dropped");
+        assert_eq!(
+            ts("app/src/util.ts", "./util"),
+            None,
+            "self-imports are dropped"
+        );
 
         let rust = |file: &str, spec: &str| resolver.resolve(ImportLanguage::Rust, file, spec);
         assert_eq!(
