@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import type { LayerVisibility, RepositoryGraph, RepositoryNode } from "./model";
-import { buildFlowLayout, type FlowChip } from "./flowLayout";
+import { buildFlowLayout, chipContents, type FlowChip } from "./flowLayout";
 import type { ImportFlow } from "./repositoryLayout";
 import RepositoryScene from "./RepositoryScene";
 
@@ -12,12 +12,13 @@ interface FlowSceneProps {
   onSelect: (id: string) => void;
 }
 
-const CHIP_W = 176;
-// Chip height scales with module size: the min fits name and meta, the max
-// leaves room for a wrapped description inside the card.
-const CHIP_H_MIN = 46;
-const CHIP_H_MAX = 118;
-const COL_GAP = 128;
+const CHIP_W_MIN = 208;
+const CHIP_W_MAX = 328;
+const CHIP_HEADER = 44;
+const CHIP_H_MIN = CHIP_HEADER;
+const CHIP_BODY_MIN = 52;
+const CHIP_BODY_MAX = 220;
+const COL_GAP = 112;
 const ROW_GAP = 20;
 const MARGIN_X = 56;
 // The panel header and the floating toolbar overlay the top of the mount, so
@@ -30,30 +31,15 @@ const MAX_ANIMATED_EDGES = 250;
 
 const edgeKey = (edge: ImportFlow) => `${edge.source}→${edge.target}`;
 
-function chipLabel(name: string) {
-  return name.length > 21 ? `${name.slice(0, 19)}..` : name;
+function chipLabel(name: string, width: number) {
+  const max = Math.max(12, Math.floor((width - 32) / 7.2));
+  return name.length > max ? `${name.slice(0, max - 2)}..` : name;
 }
 
-// Greedy word wrap for the in-card description; ~36 serif glyphs span the plate.
-function wrapDescription(text: string, maxLines: number): string[] {
-  if (maxLines <= 0) return [];
-  const lines: string[] = [];
-  let line = "";
-  for (const word of text.split(/\s+/)) {
-    const next = line ? `${line} ${word}` : word;
-    if (next.length > 36 && line) {
-      lines.push(line);
-      line = word;
-    } else {
-      line = next;
-    }
-  }
-  if (line) lines.push(line);
-  if (lines.length > maxLines) {
-    lines.length = maxLines;
-    lines[maxLines - 1] = `${lines[maxLines - 1].slice(0, 34)}…`;
-  }
-  return lines;
+function cellLabel(name: string, width: number) {
+  const max = Math.max(3, Math.floor((width - 6) / 5.4));
+  const text = name.length > max ? `${name.slice(0, max - 1)}…` : name;
+  return text.toUpperCase();
 }
 
 function columnLabel(column: number, columnCount: number) {
@@ -193,6 +179,14 @@ function FlowScene({ graph, selectedId, searchQuery, maxDepth, onSelect }: FlowS
     () => (traceId ? trace(traceId, layout.edges) : null),
     [traceId, layout],
   );
+  const childCount = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const edge of graph.edges) {
+      if (edge.kind !== "contains") continue;
+      counts.set(edge.source, (counts.get(edge.source) ?? 0) + 1);
+    }
+    return counts;
+  }, [graph]);
 
   if (!graph.stats.importsAvailable) {
     return (
@@ -217,16 +211,42 @@ function FlowScene({ graph, selectedId, searchQuery, maxDepth, onSelect }: FlowS
     );
   }
 
-  const chipX = (column: number) => MARGIN_X + column * (CHIP_W + COL_GAP);
-  const width = MARGIN_X * 2 + layout.columnCount * CHIP_W + (layout.columnCount - 1) * COL_GAP;
   const maxWeight = Math.max(1, ...layout.edges.map((edge) => edge.weight));
   // Module sizes are power-law distributed; sqrt keeps small modules visible
   // without flattening the giants the way a log scale would.
   const sizeOf = (node: RepositoryNode) =>
     graph.stats.lineCountAvailable ? node.lines : node.sizeBytes;
   const maxSize = Math.max(1, ...layout.chips.map((chip) => sizeOf(chip.node)));
-  const chipH = (node: RepositoryNode) =>
-    CHIP_H_MIN + (CHIP_H_MAX - CHIP_H_MIN) * Math.sqrt(sizeOf(node) / maxSize);
+  const scaleOfSize = (node: RepositoryNode) => Math.sqrt(sizeOf(node) / maxSize);
+  const chipW = (node: RepositoryNode) => {
+    if ((childCount.get(node.id) ?? 0) === 0) return CHIP_W_MIN;
+    return CHIP_W_MIN + (CHIP_W_MAX - CHIP_W_MIN) * scaleOfSize(node);
+  };
+  const chipH = (node: RepositoryNode) => {
+    if ((childCount.get(node.id) ?? 0) === 0) return CHIP_H_MIN;
+    return (
+      CHIP_HEADER +
+      CHIP_BODY_MIN +
+      (CHIP_BODY_MAX - CHIP_BODY_MIN) * scaleOfSize(node)
+    );
+  };
+  const columnWidth = Array.from({ length: layout.columnCount }, () => CHIP_W_MIN);
+  for (const chip of layout.chips) {
+    columnWidth[chip.column] = Math.max(columnWidth[chip.column], chipW(chip.node));
+  }
+  const columnX: number[] = [];
+  {
+    let x = MARGIN_X;
+    for (let column = 0; column < layout.columnCount; column += 1) {
+      columnX.push(x);
+      x += columnWidth[column] + COL_GAP;
+    }
+  }
+  const chipX = (column: number) => columnX[column] ?? MARGIN_X;
+  const width =
+    layout.columnCount === 0
+      ? MARGIN_X * 2
+      : chipX(layout.columnCount - 1) + columnWidth[layout.columnCount - 1] + MARGIN_X;
   // Heights vary, so chips stack per column instead of sitting on a row grid.
   const chipTop = new Map<string, number>();
   let bottom = HEADER_Y;
@@ -260,7 +280,7 @@ function FlowScene({ graph, selectedId, searchQuery, maxDepth, onSelect }: FlowS
     let end: { x: number; y: number };
     if (!cycle) {
       // Forward: right side of the importer to the left side of the imported.
-      const x1 = chipX(source.column) + CHIP_W;
+      const x1 = chipX(source.column) + chipW(source.node);
       const x2 = chipX(target.column);
       const bend = Math.max(44, (x2 - x1) * 0.45);
       control = { x: x2 - bend, y: ty };
@@ -270,7 +290,7 @@ function FlowScene({ graph, selectedId, searchQuery, maxDepth, onSelect }: FlowS
       // Backward cycle edge: leftward sweep from the importer's left side into
       // the imported module's right side.
       const x1 = chipX(source.column);
-      const x2 = chipX(target.column) + CHIP_W;
+      const x2 = chipX(target.column) + chipW(target.node);
       control = { x: x2 + 44, y: ty };
       end = { x: x2, y: ty };
       path = `M ${x1} ${sy} C ${x1 - 44} ${sy}, ${control.x} ${control.y}, ${end.x} ${end.y}`;
@@ -326,9 +346,14 @@ function FlowScene({ graph, selectedId, searchQuery, maxDepth, onSelect }: FlowS
 
           {layout.chips.map((chip: FlowChip) => {
             const { node } = chip;
+            const w = chipW(node);
             const h = chipH(node);
-            const blurb = node.description ?? (node.path !== node.name ? node.path : null);
-            const descLines = blurb ? wrapDescription(blurb, Math.floor((h - 49) / 11)) : [];
+            const bodyH = h - CHIP_HEADER - 6;
+            const bodyW = w - 14;
+            const cells =
+              bodyH >= 24
+                ? chipContents(graph, node.id, bodyW, bodyH)
+                : [];
             const faded = query !== "" && !matchesQuery(node, query);
             const dimmed = active !== null && !active.chips.has(node.id);
             const classes = [
@@ -346,7 +371,10 @@ function FlowScene({ graph, selectedId, searchQuery, maxDepth, onSelect }: FlowS
                 tabIndex={0}
                 role="button"
                 aria-label={`${node.path}: imports ${chip.fanOut}, imported by ${chip.fanIn}`}
-                onClick={() => onSelect(node.id)}
+                onClick={(event) => {
+                  const target = event.target as SVGElement;
+                  onSelect(target.dataset.childId ?? node.id);
+                }}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" || event.key === " ") {
                     event.preventDefault();
@@ -357,10 +385,10 @@ function FlowScene({ graph, selectedId, searchQuery, maxDepth, onSelect }: FlowS
                 onPointerLeave={hoverCapable ? () => setHoveredId(null) : undefined}
               >
                 <title>{node.description ?? node.path}</title>
-                <rect className="chip-plate" width={CHIP_W} height={h} rx={3} />
+                <rect className="chip-plate" width={w} height={h} rx={3} />
                 <rect className={`chip-mark chip-${node.kind}`} x={10} y={11} width={7} height={7} />
                 <text className="chip-name" x={24} y={19}>
-                  {chipLabel(node.name)}
+                  {chipLabel(node.name, w)}
                 </text>
                 <text className="chip-meta" x={24} y={35}>
                   {`IN ${chip.fanIn} · OUT ${chip.fanOut}${
@@ -369,11 +397,34 @@ function FlowScene({ graph, selectedId, searchQuery, maxDepth, onSelect }: FlowS
                       : ""
                   }`}
                 </text>
-                {descLines.map((line, index) => (
-                  <text key={index} className="chip-desc" x={10} y={52 + index * 11}>
-                    {line}
-                  </text>
-                ))}
+                {cells.map((cell) => {
+                  const x = 7 + cell.x;
+                  const y = CHIP_HEADER + cell.y;
+                  const labeled = cell.width >= 40 && cell.height >= 14;
+                  return (
+                    <g key={cell.node.id}>
+                      <rect
+                        className={`chip-cell chip-${cell.node.kind}`}
+                        data-child-id={cell.node.id}
+                        x={x + 0.6}
+                        y={y + 0.6}
+                        width={Math.max(1, cell.width - 1.2)}
+                        height={Math.max(1, cell.height - 1.2)}
+                      >
+                        <title>{cell.node.path}</title>
+                      </rect>
+                      {labeled ? (
+                        <text
+                          className="chip-cell-label"
+                          x={x + 4}
+                          y={y + Math.min(12, cell.height - 3)}
+                        >
+                          {cellLabel(cell.node.name, cell.width)}
+                        </text>
+                      ) : null}
+                    </g>
+                  );
+                })}
               </g>
             );
           })}
@@ -393,7 +444,7 @@ function FlowScene({ graph, selectedId, searchQuery, maxDepth, onSelect }: FlowS
       <div className="axis-key" aria-hidden="true">
         <span>Left imports right / pulses follow imports</span>
         <span>Line weight / import count</span>
-        <span>{`Chip height / size (${graph.stats.lineCountAvailable ? "lines" : "bytes"})`}</span>
+        <span>{`Chip size / nested modules (${graph.stats.lineCountAvailable ? "lines" : "bytes"})`}</span>
         {Number.isFinite(maxDepth) && layout.effectiveDepth > maxDepth ? (
           <span>Auto detail / depth {layout.effectiveDepth}</span>
         ) : null}

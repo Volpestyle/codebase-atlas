@@ -1,7 +1,9 @@
 import type { RepositoryGraph, RepositoryNode } from "./model";
 // The .ts extension keeps this importable by the node:test runner, which
 // strips types but does not resolve extensionless value imports.
-import { aggregateImports, type ImportFlow } from "./repositoryLayout.ts";
+import { aggregateImports, packTreemap, type ImportFlow } from "./repositoryLayout.ts";
+
+export const MAX_CHIP_CELLS = 16;
 
 // Chips carry readable labels; past this count a diagram stops being one.
 export const MAX_FLOW_NODES = 220;
@@ -123,6 +125,60 @@ export function buildFlowLayout(
     layout = layoutAtDepth(graph, depth);
   }
   return { ...layout, effectiveDepth: depth };
+}
+
+export interface ChipCell {
+  node: RepositoryNode;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+function contentWeight(node: RepositoryNode, lineCountAvailable: boolean) {
+  const value = lineCountAvailable ? node.lines : node.sizeBytes;
+  return Math.max(1, value);
+}
+
+// Direct children packed into a chip's extra area, heaviest first.
+export function chipContents(
+  graph: RepositoryGraph,
+  parentId: string,
+  width: number,
+  height: number,
+  cap: number = MAX_CHIP_CELLS,
+): ChipCell[] {
+  if (width < 8 || height < 8) return [];
+  const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
+  const children: RepositoryNode[] = [];
+  for (const edge of graph.edges) {
+    if (edge.kind !== "contains" || edge.source !== parentId) continue;
+    const child = nodeById.get(edge.target);
+    if (child) children.push(child);
+  }
+  if (children.length === 0) return [];
+  const ranked = [...children].sort(
+    (left, right) =>
+      contentWeight(right, graph.stats.lineCountAvailable) -
+        contentWeight(left, graph.stats.lineCountAvailable) ||
+      left.path.localeCompare(right.path),
+  );
+  const kept = ranked.slice(0, cap);
+  const weights = kept.map((node) => contentWeight(node, graph.stats.lineCountAvailable));
+  const total = weights.reduce((sum, value) => sum + value, 0);
+  const boxArea = width * height;
+  const items = kept.map((node, index) => ({
+    id: node.id,
+    area: (weights[index] / total) * boxArea,
+  }));
+  const cells = packTreemap(items, width, height);
+  return kept
+    .map((node) => {
+      const cell = cells.get(node.id);
+      if (!cell) return null;
+      return { node, ...cell };
+    })
+    .filter((cell): cell is ChipCell => cell !== null);
 }
 
 function layoutAtDepth(

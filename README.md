@@ -83,7 +83,7 @@ flowchart LR
   Peek --> Scale
 ```
 - Toggle structure, source, config, documentation, and import layers independently.
-- Switch between **map** and **flow** above the scene. Flow lays the same modules out by import direction — animated pulses run along each edge from importer to imported, line weight encodes import count, chips carry line counts — and selecting a chip (click or tap) dims everything except its transitive upstream and downstream. Flow needs import edges, so it asks for a local scan or an exported map when the source is GitHub.
+- Switch between **map** and **flow** above the scene. Flow lays the same modules out by import direction — animated pulses run along each edge from importer to imported, line weight encodes import count, and chip size scales with the module. Large chips fill their extra area with a nested treemap of what they contain (click a cell to inspect that child) instead of a description. Selecting a chip (click or tap) dims everything except its transitive upstream and downstream. Flow needs import edges, so it asks for a local scan or an exported map when the source is GitHub.
 - Drag the survey slider to set how many directory levels both views render by default (default 2; the top stop shows all). Import edges aggregate to the visible level, so a coarse survey shows package-to-package flow. Opening a district does not move the slider.
 - Drag the module or inspector dividers to resize the side panels. Double-click a divider to restore its default width. The chosen widths persist for the next launch.
 - Press `G` to load GitHub, `/` to search, `0` to reset the camera, and `+` or `-` to zoom.

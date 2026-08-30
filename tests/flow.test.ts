@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildFlowLayout, MAX_FLOW_NODES } from "../src/flowLayout.ts";
+import { buildFlowLayout, chipContents, MAX_FLOW_NODES } from "../src/flowLayout.ts";
 import type { RepositoryEdge, RepositoryGraph, RepositoryNode } from "../src/model.ts";
 
 function node(overrides: Partial<RepositoryNode> & { id: string }): RepositoryNode {
@@ -184,4 +184,36 @@ test("caps chips by flow weight and reports the full module count", () => {
   for (const edge of layout.edges) {
     assert.ok(kept.has(edge.source) && kept.has(edge.target), "no edges dangle past the cap");
   }
+});
+
+test("chip interiors pack children by weight into the extra tile area", () => {
+  const graph = graphOf(
+    [
+      node({ id: ".", kind: "repository" }),
+      node({ id: "app", kind: "directory", lines: 90 }),
+      node({ id: "app/big.ts", lines: 60 }),
+      node({ id: "app/mid.ts", lines: 20 }),
+      node({ id: "app/tiny.ts", lines: 10 }),
+    ],
+    [
+      ...containsChain(["app", "app/big.ts", "app/mid.ts", "app/tiny.ts"]),
+      importEdge("app/big.ts", "app/mid.ts"),
+    ],
+  );
+
+  const cells = chipContents(graph, "app", 200, 120);
+  assert.equal(cells.length, 3);
+  const byId = new Map(cells.map((cell) => [cell.node.id, cell]));
+  const big = byId.get("app/big.ts")!;
+  const tiny = byId.get("app/tiny.ts")!;
+  assert.ok(
+    big.width * big.height > tiny.width * tiny.height,
+    "heavier children occupy more of the chip",
+  );
+  for (const cell of cells) {
+    assert.ok(cell.x >= -1e-6 && cell.y >= -1e-6);
+    assert.ok(cell.x + cell.width <= 200 + 1e-6);
+    assert.ok(cell.y + cell.height <= 120 + 1e-6);
+  }
+  assert.equal(chipContents(graph, "app/big.ts", 200, 120).length, 0, "files have no interior");
 });

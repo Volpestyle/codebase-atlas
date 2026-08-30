@@ -135,6 +135,33 @@ function squarify(items: { id: string; area: number }[], rect: Rect): Map<string
   return cells;
 }
 
+export interface TreemapCell {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+// 2D squarified treemap used by flow chips to draw a module's children.
+export function packTreemap(
+  items: { id: string; area: number }[],
+  width: number,
+  height: number,
+): Map<string, TreemapCell> {
+  const packed = new Map<string, TreemapCell>();
+  if (width <= 0 || height <= 0 || items.length === 0) return packed;
+  const cells = squarify(items, { x0: 0, z0: 0, x1: width, z1: height });
+  for (const [id, cell] of cells) {
+    packed.set(id, {
+      x: cell.x0,
+      y: cell.z0,
+      width: cell.x1 - cell.x0,
+      height: cell.z1 - cell.z0,
+    });
+  }
+  return packed;
+}
+
 function inset(rect: Rect): Rect {
   const short = Math.min(rect.x1 - rect.x0, rect.z1 - rect.z0);
   const pad = Math.min(short * PADDING_RATIO + 0.045, 0.38);

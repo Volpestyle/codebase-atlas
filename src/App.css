@@ -1721,19 +1721,30 @@ body.is-resizing-panels * {
   font-variant-numeric: tabular-nums;
 }
 
-.flow-chip .chip-desc {
-  fill: var(--olive);
-  font-family: var(--font-serif);
-  font-size: 8.5px;
-  font-style: italic;
+.flow-chip .chip-cell {
+  stroke: var(--ink);
+  stroke-width: 0.7;
+}
+
+.flow-chip .chip-cell:hover {
+  stroke: var(--rust);
+  stroke-width: 1.2;
+}
+
+.flow-chip .chip-cell-label {
+  fill: var(--ink);
+  font-size: 7px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  pointer-events: none;
 }
 
 .flow-chip.is-selected .chip-plate {
   fill: var(--ink);
 }
 
-.flow-chip.is-selected .chip-desc {
-  fill: var(--paper-dark);
+.flow-chip.is-selected .chip-cell {
+  stroke: var(--paper-dark);
 }
 
 .flow-chip.is-selected .chip-name {
