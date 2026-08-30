@@ -56,6 +56,65 @@ export interface RepositoryStats {
   truncated: boolean;
 }
 
+/** Where an actor sits in the telling. The order is the diagram's left-to-right
+ *  order: naming a role honestly is what places it, so a story file never
+ *  carries coordinates. */
+export type ActorRole = "person" | "surface" | "door" | "core" | "store" | "external";
+
+export const ACTOR_ROLES: ActorRole[] = [
+  "person",
+  "surface",
+  "door",
+  "core",
+  "store",
+  "external",
+];
+
+/** Column headings, written for someone who has never opened a codebase. */
+export const ROLE_HEADINGS: Record<ActorRole, string> = {
+  person: "People",
+  surface: "Where they arrive",
+  door: "The way in",
+  core: "What decides",
+  store: "What it keeps",
+  external: "Outside services",
+};
+
+export interface StoryActor {
+  id: string;
+  name: string;
+  role: ActorRole;
+  blurb: string;
+  /** Scanned paths this actor is made of; empty for people and outside
+   *  services, several for a role served by more than one module. */
+  modules?: string[];
+}
+
+export interface StoryFlow {
+  from: string;
+  to: string;
+  /** What travels, in words. */
+  carries: string;
+  /** What comes back, when anything does. */
+  returns?: string;
+}
+
+export interface StoryJourney {
+  name: string;
+  blurb?: string;
+  /** Actor ids in the order data visits them. */
+  steps: string[];
+}
+
+/** The narrative layer, hand-authored in `.codebase-index/_story.json`. Prose,
+ *  not parse output: imports cannot know that a message arrives from Discord. */
+export interface Story {
+  summary: string;
+  actors: StoryActor[];
+  flows: StoryFlow[];
+  journeys: StoryJourney[];
+}
+
 export interface RepositoryGraph {
   root: string;
   name: string;
@@ -64,6 +123,8 @@ export interface RepositoryGraph {
   nodes: RepositoryNode[];
   edges: RepositoryEdge[];
   stats: RepositoryStats;
+  /** Present when the repository carries a story file. */
+  story?: Story;
   warnings: string[];
 }
 

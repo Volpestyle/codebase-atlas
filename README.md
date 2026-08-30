@@ -1,6 +1,6 @@
 # Codebase Atlas
 
-Codebase Atlas is a read-only repository graph engine with a Rust API, CLI, HTTP API, and interactive visualizer for local directories and public GitHub repositories. The visualizer renders repository structure as an orthographic 3D field with searchable modules, language statistics, import flow arcs, layer controls, and a synchronized inspector.
+Codebase Atlas is a read-only repository graph engine with a Rust API, CLI, HTTP API, and interactive visualizer for local directories and public GitHub repositories. It opens on a plain-English story of how the code works — the parts a reader would recognize and what travels between them — and drills into two reference views over the same repository: an orthographic 3D field with searchable modules, language statistics, import flow arcs, layer controls, and a synchronized inspector, and an import-flow diagram.
 
 The application runs as a web app, a Tauri 2 desktop app on macOS, Windows, and Linux, and a Tauri iOS app on iPhone and iPad. It uses React 19, TypeScript, and Three.js.
 
@@ -20,20 +20,25 @@ flowchart LR
     C --> F[Git branch detection]
     C --> O[tree-sitter symbol and import extraction]
     O --> R[import resolution]
+    C --> V[story validation<br/>against the scanned tree]
+    V --> G
     D --> G[RepositoryGraph]
     E --> G
     F --> G
     O --> G
     R --> G
     GH --> G
+    M[".codebase-index/_story.json"] --> C
     G --> I[Searchable module index]
     G --> J[Three.js orthographic scene]
     G --> P[SVG import flow diagram]
+    G --> N[SVG story diagram]
     G --> K[Node inspector]
     I <--> J
     I <--> P
     J <--> K
     P <--> K
+    N --> K
 ```
 
 `codebase_atlas_lib` is the product boundary. Its public `scan` and `scan_json` functions produce the canonical serializable `RepositoryGraph`; the `atlas` CLI, `/v1` HTTP server, and Tauri commands are thin adapters over that API. The core/API/CLI is the default Cargo build and has no Tauri runtime dependency; Tauri enables the `app` feature for the desktop and mobile wrapper. React renders graphs and owns interaction state, but it does not scan local repositories. The browser-only GitHub adapter produces the same graph contract from GitHub's public repository and recursive Trees APIs. None of these sources send file contents into the scene.
@@ -67,11 +72,21 @@ flowchart LR
   I --> R[Resolution against<br/>the scanned tree]
   R --> E[Annotated import edges]
   M[".codebase-index/ mirror"] --> D[Module summaries]
+  M --> N["_story.json"]
+  N --> Y[Actors · flows · journeys]
   S --> G[RepositoryGraph]
   E --> G
   D --> G
-  G --> Q[Search · inspector · flow]
+  Y --> G
+  G --> Q[Search · inspector · map · flow]
+  G --> Z[Story view]
 ```
+- **Story view:** the landing view, and the only one written for a reader who has never opened a codebase. It draws a hand-authored `.codebase-index/_story.json`: actors with a plain-English blurb, the flows between them, and named journeys data takes end to end. It exists because the map and the flow view are both projections of the same two facts — containment and imports — and neither can express what a reader actually asks. The decisive gap is that the most important nodes in a data-flow story are not in the repository at all: the person typing, the chat service, the model being called. No parse can invent them, so the narrative is authored rather than derived, and a repository without the file gets an empty state explaining how to write one instead of a diagram derived from structure — which would only be the flow view with fewer chips.
+- **Role is the layout:** a story file carries no coordinates. An actor's `role` — `person`, `surface`, `door`, `core`, `store`, `external` — is also its column, in that reading order, so naming an actor honestly places it. Empty roles collapse rather than leaving a gap. Return paths and same-stage links draw as dashed arcs, which is why a round trip needs no second row of boxes.
+- **One arrow, both directions:** a flow records what it `carries` and, when anything comes back, what it `returns`. A journey step taken against a flow reads as its return text. Drawing one line per pair instead of two keeps a round-trip journey from doubling every arc on the diagram.
+- **Sentences live in the caption, not on the arc:** a column gap is narrower than a sentence, so on-arc labels either truncate to nothing or paint over the next card. Hovering an arc or playing a journey puts the full text in one roomy caption bar at full size instead.
+- **A journey brings the reader along:** the diagram is wider than the panel on any real repository, so playing a journey scrolls the current hop into view, lights it, keeps what it has already visited legible, and dims the rest. Width stops mattering when the view follows the data for you.
+- **The story is validated against the scan:** actor ids, flow endpoints, journey steps, and module paths are all checked against the tree that was just scanned. What no longer resolves is dropped and reported as a scan warning, so a story that has drifted from the code still renders the part that is true — the expected failure of a hand-written file that outlives a rename.
 - **Honest metrics:** local scans count lines from bounded text files. GitHub Trees provide file sizes but not contents, so GitHub maps encode size and mark line counts and import edges unavailable.
 - **Bounded work:** scans stop at 4,000 nodes, the scene renders at most 700 nodes, local line counting skips files larger than 2 MiB, and the symbol index stops at 128 declarations per file and 60,000 overall so a generated surface cannot bloat a map that also travels to a paired device. Full scan statistics and the searchable index remain available when rendering is capped.
 - **Event-driven rendering:** the scene redraws for camera or state changes instead of running a permanent animation loop.
@@ -147,32 +162,72 @@ flowchart LR
   Peek --> Scale
 ```
 - Toggle structure, source, config, documentation, tests, and import layers independently. The tests layer — files matching `*.test.*`/`*.spec.*`/`*_test.*` and everything under support directories like `test/` and `fixtures/` — starts hidden so the map leads with the product code; its toggle brings it back.
-- Switch between **map** and **flow** above the scene. Flow lays the same modules out by import direction — animated pulses run along each edge from importer to imported, line weight encodes import count, and chip size scales with the module. Large chips fill their extra area with a nested treemap of what they contain (click a cell to inspect that child) instead of a description; cells look through wrapper directories like `src` and `lib` to name the module's actual parts, and support directories (`test`, `fixtures`) render muted so the functional cells carry the chip. Selecting a chip (click or tap) dims everything except its transitive upstream and downstream. Flow needs import edges, so it asks for a local scan or an exported map when the source is GitHub.
+- Switch between **story**, **map**, and **flow** above the scene. Story opens first: a plain-English account of what the repository is, the parts a reader would recognize laid out left to right from the people who use it to the outside services it calls, and named journeys that follow one piece of data all the way through. Play a journey to watch it hop, one sentence at a time, with the diagram scrolling to keep up; hover any arrow to read what travels along it and what comes back; click a part to open the code behind it on the map. Story needs a `.codebase-index/_story.json`; without one the view says so and explains how to write it. Flow lays the same modules out by import direction — animated pulses run along each edge from importer to imported, line weight encodes import count, and chip size scales with the module. Large chips fill their extra area with a nested treemap of what they contain (click a cell to inspect that child) instead of a description; cells look through wrapper directories like `src` and `lib` to name the module's actual parts, and support directories (`test`, `fixtures`) render muted so the functional cells carry the chip. Selecting a chip (click or tap) dims everything except its transitive upstream and downstream. Flow needs import edges, so it asks for a local scan or an exported map when the source is GitHub.
 - Drag the survey slider to set how many directory levels both views render by default (default 2; the top stop shows all). Import edges aggregate to the visible level, so a coarse survey shows package-to-package flow. Opening a district does not move the slider.
 - Drag the module or inspector dividers to resize the side panels. Double-click a divider to restore its default width. The chosen widths persist for the next launch.
 - Search (`/`) matches a module's name, path, language, `.codebase-index` summary, and the names it declares, so typing a function name finds the file that defines it and the files that take it.
 - Press `G` to load GitHub, `C` to share (desktop) or connect to a computer (iPad / browser), `/` to search, `0` to reset the camera, and `+` or `-` to zoom.
 - The last successful local or GitHub source is rescanned at the next launch.
 
+## Writing a story
+
+The story view reads `.codebase-index/_story.json`. It is written by hand (or by an agent that maintains the index), not derived, because the parts that matter most to a reader — the person typing, the chat service, the model being called — are not files in the repository.
+
+```json
+{
+  "summary": "One paragraph a non-programmer can read.",
+  "actors": [
+    { "id": "person", "name": "Someone in Discord", "role": "person",
+      "blurb": "Anyone chatting with Clankie in a server or a DM." },
+    { "id": "front-door", "name": "The front door", "role": "door",
+      "blurb": "Every request lands here first. It checks who is calling.",
+      "modules": ["apps/clankie/src/app.ts", "packages/api-client"] }
+  ],
+  "flows": [
+    { "from": "person", "to": "front-door",
+      "carries": "a message someone typed",
+      "returns": "his reply, posted back in the same place" }
+  ],
+  "journeys": [
+    { "name": "Someone asks a question",
+      "blurb": "The ordinary path.",
+      "steps": ["person", "front-door", "person"] }
+  ]
+}
+```
+
+- `role` is also the column, in the order `person`, `surface`, `door`, `core`, `store`, `external`. There are no coordinates: name the role honestly and the layout follows.
+- `modules` are paths as the scan sees them. An actor is a role, not a directory — several modules can serve one, and people and outside services have none.
+- `carries` and `returns` are sentences, not type names. One arrow carries both directions.
+- `steps` are actor ids. Consecutive pairs need a flow in one direction or the other; a step taken against a flow reads as its `returns`.
+- Everything is checked against the scanned tree. Unknown ids and stale paths are dropped and reported as scan warnings rather than failing the scan, so the story keeps rendering the part that is still true.
+
 ## Development
 
 Install the current [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for the host platform, then run:
 
 ```bash
-npm install
-npm run dev
-npm run tauri dev
+pnpm install
+pnpm dev
+pnpm tauri dev
 ```
 
 Verification commands:
 
 ```bash
-npm run build
-npm test
+pnpm build
+pnpm test
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
-npm run tauri build -- --debug --no-bundle
+pnpm tauri build -- --debug --no-bundle
 ```
+
+The package manager is pnpm, pinned by `packageManager` in `package.json`. Tauri's
+`beforeDevCommand` and `beforeBuildCommand` call it directly, so the desktop and iOS
+builds use the same toolchain as the frontend. `pnpm-workspace.yaml` also holds pnpm's
+settings — pnpm 11 no longer reads a `pnpm` field in `package.json` — and grants esbuild
+permission to run its postinstall, which links Vite's platform binary. Without that grant
+pnpm blocks every script, `pnpm test` included, not just the install.
 
 ## Project Layout
 
@@ -186,6 +241,8 @@ src/
   repositoryLayout.ts     deterministic module placement
   placeNames.ts           wrapper/support toponyms shared by map and flow
   flowLayout.ts           import-direction chip layout
+  StoryScene.tsx          narrative diagram, hover, and journey playback
+  storyLayout.ts          role-as-column placement and journey hops
   companion.ts            LAN / Tailscale companion client
   github-url.ts           GitHub URL validation
   github.ts               GitHub API and tree-to-graph adapter
@@ -197,6 +254,7 @@ src-tauri/src/
   scanner.rs              traversal, classification, metrics, tests
   imports.rs              specifier resolution against the scanned tree
   symbols.rs              tree-sitter declaration and import extraction
+  story.rs                story file parsing and validation against the scan
   companion.rs            authenticated /v1 HTTP adapter
   bin/atlas.rs             atlas scan / serve entry point
   bin/scan.rs             compatibility alias for atlas scan

@@ -2086,3 +2086,332 @@ body.is-resizing-panels * {
     font-size: 16px;
   }
 }
+
+/* ---- Story view -------------------------------------------------------- */
+/* The narrative layer. Larger type and full sentences: this is the one view
+   written for a reader who has never opened the codebase. */
+
+.story-mount {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  /* The panel header and the floating toolbar overlay the top of the mount. */
+  padding-top: 104px;
+  overflow: hidden;
+}
+
+.story-brief {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 28px;
+  flex-wrap: wrap;
+  padding: 14px 20px 12px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--plate);
+}
+
+.story-summary {
+  max-width: 62ch;
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-serif);
+  font-size: var(--fs-prose);
+  line-height: 1.55;
+}
+
+.story-journeys {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 210px;
+}
+
+.story-journeys ul {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.story-journeys button {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: var(--fs-title);
+  text-align: left;
+  cursor: pointer;
+}
+
+.story-journeys button:hover {
+  border-color: var(--hairline);
+  background: var(--ink-wash);
+}
+
+.story-journeys button.is-active {
+  border-color: var(--rust-line);
+  background: var(--rust-wash);
+  color: var(--rust);
+}
+
+.story-journey-play {
+  font-size: var(--fs-small);
+  color: var(--rust);
+}
+
+.story-scroll {
+  flex: 1;
+  overflow: auto;
+  background:
+    repeating-linear-gradient(0deg, transparent 0 23px, rgba(20, 21, 15, 0.05) 23px 24px),
+    repeating-linear-gradient(90deg, transparent 0 23px, rgba(20, 21, 15, 0.05) 23px 24px),
+    var(--paper);
+}
+
+.story-diagram {
+  display: block;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.story-column-heading {
+  fill: var(--olive);
+  font-size: var(--fs-small);
+  letter-spacing: 0.14em;
+}
+
+/* Cards ------------------------------------------------------------------ */
+
+.story-card {
+  cursor: pointer;
+}
+
+.story-card-plate {
+  fill: var(--paper-light);
+  stroke: var(--line);
+  stroke-width: 1;
+  transition:
+    fill 140ms,
+    stroke 140ms;
+}
+
+.story-card-name {
+  fill: var(--ink);
+  font-size: var(--fs-title);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.story-card-blurb {
+  fill: var(--olive);
+  font-family: var(--font-serif);
+  font-size: 12px;
+}
+
+.story-card-modules {
+  fill: var(--faint);
+  font-size: var(--fs-label);
+  letter-spacing: 0.04em;
+}
+
+/* Role is the only colour in the view, so the legend is the layout itself. */
+.story-role-person .story-card-plate {
+  fill: var(--paper);
+  stroke-dasharray: 4 3;
+}
+
+.story-role-external .story-card-plate {
+  fill: var(--paper);
+  stroke-dasharray: 4 3;
+}
+
+.story-role-door .story-card-plate {
+  fill: var(--paper-dark);
+}
+
+.story-role-core .story-card-plate {
+  fill: var(--paper-light);
+  stroke-width: 1.6;
+}
+
+.story-role-store .story-card-plate {
+  fill: var(--paper);
+}
+
+.story-card:hover .story-card-plate,
+.story-card:focus-visible .story-card-plate {
+  stroke: var(--rust);
+}
+
+.story-card.is-on .story-card-plate {
+  fill: var(--map-glow);
+  stroke: var(--rust);
+  stroke-width: 1.8;
+}
+
+.story-card.is-off {
+  opacity: 0.28;
+}
+
+/* Flows ------------------------------------------------------------------ */
+
+/* A hairline is too thin to point at; this widens the target without
+   thickening the drawn line. */
+.story-flow-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14;
+  cursor: help;
+}
+
+.story-flow-line {
+  fill: none;
+  stroke: var(--ink);
+  stroke-opacity: 0.34;
+  stroke-width: 1.2;
+  transition: stroke-opacity 140ms;
+}
+
+.story-flow-arrow {
+  fill: var(--ink);
+  fill-opacity: 0.4;
+  transition: fill-opacity 140ms;
+}
+
+.story-flow.is-back .story-flow-line {
+  stroke-dasharray: 5 4;
+}
+
+.story-flow.is-dim .story-flow-line {
+  stroke-opacity: 0.1;
+}
+
+.story-flow.is-dim .story-flow-arrow {
+  fill-opacity: 0.12;
+}
+
+.story-flow.is-live .story-flow-line {
+  stroke: var(--rust);
+  stroke-opacity: 0.9;
+  stroke-width: 1.8;
+}
+
+.story-flow.is-live .story-flow-arrow {
+  fill: var(--rust);
+  fill-opacity: 1;
+}
+
+.story-flow-pulse {
+  fill: none;
+  stroke: var(--rust);
+  stroke-width: 3;
+  stroke-opacity: 0.75;
+  stroke-dasharray: 4 18;
+  stroke-linecap: round;
+  animation: flow-march 1.4s linear infinite;
+}
+
+/* Journey caption -------------------------------------------------------- */
+
+.story-caption {
+  border-top: 1px solid var(--line);
+  padding: 10px 20px 12px;
+  background: var(--plate);
+}
+
+.story-caption-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.story-caption-controls {
+  display: flex;
+  gap: 2px;
+}
+
+.story-caption-controls button {
+  min-width: 26px;
+  padding: 2px 6px;
+  border: 1px solid var(--hairline);
+  background: var(--paper-light);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: var(--fs-small);
+  cursor: pointer;
+}
+
+.story-caption-controls button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.story-caption-text {
+  margin: 6px 0 0;
+  font-family: var(--font-serif);
+  font-size: var(--fs-prose);
+  line-height: 1.5;
+}
+
+.story-caption-text strong {
+  font-family: var(--font-mono);
+  font-size: var(--fs-title);
+  font-weight: 600;
+}
+
+.story-caption-carries {
+  display: block;
+  color: var(--rust);
+}
+
+.story-caption-returns {
+  display: block;
+  color: var(--olive);
+}
+
+.story-caption-note {
+  margin: 4px 0 0;
+  color: var(--olive);
+  font-family: var(--font-serif);
+  font-size: var(--fs-title);
+}
+
+.story-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 10px;
+  height: 100%;
+  padding: 0 clamp(24px, 12vw, 160px);
+}
+
+.story-empty p {
+  max-width: 56ch;
+  color: var(--olive);
+  font-size: var(--fs-title);
+  line-height: 1.6;
+}
+
+.story-empty code {
+  color: var(--rust);
+  font-size: var(--fs-base);
+}
+
+@media (max-width: 720px) {
+  .story-brief {
+    flex-direction: column;
+    gap: 12px;
+  }
+}

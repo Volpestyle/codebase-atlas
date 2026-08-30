@@ -4,6 +4,7 @@ pub mod cli;
 mod companion;
 mod imports;
 mod scanner;
+mod story;
 mod symbols;
 
 #[cfg(feature = "app")]

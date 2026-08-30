@@ -8,6 +8,7 @@ use ignore::{DirEntry, WalkBuilder};
 use serde::Serialize;
 
 use crate::imports::{self, ImportResolver};
+use crate::story::{self, Story};
 use crate::symbols::{self, ImportLanguage, ImportRef, Symbol};
 
 const MAX_NODES: usize = 4_000;
@@ -39,6 +40,9 @@ pub struct RepositoryGraph {
     nodes: Vec<RepositoryNode>,
     edges: Vec<RepositoryEdge>,
     stats: RepositoryStats,
+    /// The hand-authored narrative layer, when the repository carries one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    story: Option<Story>,
     warnings: Vec<String>,
 }
 
@@ -421,6 +425,9 @@ impl ScanState {
         self.edges.extend(import_edges);
         self.cap_symbols();
         attach_index_summaries(root, &mut self.nodes, &mut self.warnings);
+        let node_ids = self.nodes.iter().map(|node| node.id.as_str()).collect();
+        let story = story::attach_story(root, &node_ids, &mut self.warnings);
+        drop(node_ids);
         self.nodes.sort_by(|left, right| left.id.cmp(&right.id));
         self.edges.sort_by(|left, right| {
             left.source
@@ -467,6 +474,7 @@ impl ScanState {
                 languages,
                 truncated: self.truncated,
             },
+            story,
             warnings: self.warnings,
         }
     }

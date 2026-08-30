@@ -9,6 +9,7 @@ import Seg from "./ui/Seg";
 import Stat from "./ui/Stat";
 import RepositoryScene, { type RepositorySceneHandle } from "./RepositoryScene";
 import FlowScene from "./FlowScene";
+import StoryScene from "./StoryScene";
 import { scanGitHubRepository } from "./github";
 import {
   connectPairing,
@@ -63,6 +64,17 @@ const isTauriRuntime = "__TAURI_INTERNALS__" in window;
 const isDesktopRuntime = isTauriRuntime && navigator.maxTouchPoints < 2;
 
 // Granularity slider range; the top stop renders every depth.
+// Story first: it is the only view that opens with sentences instead of 987
+// modules, so it is what a reader meets before the reference views.
+const VIEW_MODES = ["story", "map", "flow"] as const;
+type ViewMode = (typeof VIEW_MODES)[number];
+
+const VIEW_INDEX: Record<ViewMode, string> = {
+  story: "B.02 / How it works",
+  map: "B.02 / Orthographic",
+  flow: "B.02 / Import flow",
+};
+
 const MAX_MAP_DEPTH = 8;
 const DEFAULT_MAP_DEPTH = 2;
 
@@ -333,7 +345,7 @@ function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [layers, setLayers] = useState<LayerVisibility>(defaultLayers);
   const [depth, setDepth] = useState(DEFAULT_MAP_DEPTH);
-  const [view, setView] = useState<"map" | "flow">("map");
+  const [view, setView] = useState<ViewMode>("story");
   const [inspectorTab, setInspectorTab] = useState<"overview" | "details">("overview");
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
@@ -1444,7 +1456,7 @@ function App() {
           <div className="map-header">
             <div className="location-block">
               <span className="section-index">
-                {view === "map" ? "B.02 / Orthographic" : "B.02 / Import flow"}
+                {VIEW_INDEX[view]}
                 {focusScale ? ` · ${focusScale}` : ""}
                 {focusOffset ? ` · +${focusOffset}` : ""}
               </span>
@@ -1474,7 +1486,7 @@ function App() {
               <div className="scene-toolbar" aria-label="Map controls">
                 <div className="toolbar-cluster">
                   <Seg plate className="view-controls" role="group" aria-label="Visualization mode">
-                    {(["map", "flow"] as const).map((mode) => (
+                    {VIEW_MODES.map((mode) => (
                       <button
                         key={mode}
                         type="button"
@@ -1506,6 +1518,7 @@ function App() {
                     </Seg>
                   ) : null}
                 </div>
+                {view === "story" ? null : (
                 <div className="altitude-controls">
                   <label
                     className="depth-controls plate"
@@ -1539,6 +1552,7 @@ function App() {
                     </Seg>
                   ) : null}
                 </div>
+                )}
                 {view === "map" ? (
                   <Seg plate className="camera-controls">
                     <button
@@ -1568,7 +1582,31 @@ function App() {
                   </Seg>
                 ) : null}
               </div>
-              {view === "map" ? (
+              {view === "story" ? (
+                graph.story ? (
+                  <StoryScene
+                    story={graph.story}
+                    selectedId={selectedId}
+                    onSelect={selectNode}
+                  />
+                ) : (
+                  <section className="story-empty">
+                    <span className="section-index">Story / not written</span>
+                    <h2>No story for this repository</h2>
+                    <p>
+                      The map and flow views are read from the code itself. This view is
+                      not: it needs a short, hand-written account of what the parts are
+                      and what travels between them, because no parse can recover that a
+                      message arrives from a chat server or that a model writes the reply.
+                    </p>
+                    <p>
+                      Add <code>.codebase-index/_story.json</code> to the repository —
+                      actors with a plain-English blurb, the flows between them, and the
+                      journeys data takes. The map and flow views work without it.
+                    </p>
+                  </section>
+                )
+              ) : view === "map" ? (
                 <>
                   <RepositoryScene
                     ref={sceneRef}
@@ -1946,7 +1984,11 @@ function App() {
           {loading ? "Scanning" : graph ? "Map ready" : "Awaiting source"}
         </div>
         <p>
-          {view === "map" ? (
+          {view === "story" ? (
+            <>
+              Pick a journey to follow the data · hover a part to see what it touches · click it to open it on the map
+            </>
+          ) : view === "map" ? (
             <>
               Drag to orbit · click a district to go there · click it again to look inside · <kbd>esc</kbd> backs out · <kbd>/</kbd> search · <kbd>0</kbd> reset
             </>
