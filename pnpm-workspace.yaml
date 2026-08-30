@@ -1,0 +1,6 @@
+# pnpm 11 reads settings from here, not from a "pnpm" field in package.json,
+# and spells this one `allowBuilds` (not the older `onlyBuiltDependencies`).
+# esbuild links its platform binary from a postinstall script, and pnpm blocks
+# every script — including `pnpm test` — until each build script is decided.
+allowBuilds:
+  esbuild: true
