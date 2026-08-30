@@ -15,15 +15,31 @@ import type {
 } from "./model";
 import { layerForNode } from "./model";
 import {
+  arteryKeys,
   buildRepositoryLayout,
+  flowKey,
   revealedForSelection,
   type LayoutModule,
   type RepositoryLayout,
 } from "./repositoryLayout";
-import { nodeGlyph, scaleOf } from "./location";
+import {
+  framingTargetId,
+  framingZoom,
+  isMapPlaceName,
+  parentPath,
+  poseAlreadyFramed,
+  sceneReadout,
+  SURVEY_ZOOM,
+  type Frameable,
+} from "./placeNames";
+import { nodeGlyph } from "./location";
 import { mapPalette, type MapPalette } from "./ui/theme";
 
 const MAX_FILE_LABELS = 48;
+const MAX_DISTRICT_LABELS = 48;
+const FLY_MS = 420;
+
+type LabelMode = "region" | "slab" | "file";
 
 export interface RepositorySceneHandle {
   resetCamera: () => void;
@@ -34,10 +50,14 @@ export interface RepositorySceneHandle {
 interface RepositorySceneProps {
   graph: RepositoryGraph;
   selectedId: string | null;
+  /** The district deliberately broken open; selection alone reveals nothing. */
+  openedId?: string | null;
   searchQuery: string;
   layers: LayerVisibility;
   maxDepth: number;
   onSelect: (id: string | null) => void;
+  /** The flow inset snaps to the selection; the main map eases there. */
+  animateCamera?: boolean;
 }
 
 interface SceneVisual {
@@ -48,12 +68,18 @@ interface SceneVisual {
   wire: THREE.LineBasicMaterial;
   label: THREE.SpriteMaterial | null;
   baseColor: number;
+  width: number;
+  depth: number;
+  height: number;
 }
 
 interface ImportVisual {
   source: string;
   target: string;
   weight: number;
+  /** This arc's weight relative to the heaviest arc in the layout, 0..1. */
+  weightRatio: number;
+  artery: boolean;
   group: THREE.Group;
   materials: THREE.MeshBasicMaterial[];
   baseOpacity: number;
@@ -81,6 +107,7 @@ interface SceneEngine {
   hoveredFlowIndex: number | null;
   render: () => void;
   updateVisuals: () => void;
+  frameSelection: (id: string | null) => void;
 }
 
 function createLabel(palette: MapPalette, text: string, kind: "district" | "file" = "district") {
@@ -92,13 +119,26 @@ function createLabel(palette: MapPalette, text: string, kind: "district" | "file
   if (!context) return null;
 
   context.clearRect(0, 0, canvas.width, canvas.height);
-  context.fillStyle = palette.ink;
   context.font = `${compact ? "700 20px" : "600 24px"} ${palette.fontMono}`;
   context.textAlign = "center";
   context.textBaseline = "middle";
   const max = compact ? 6 : 27;
-  const label = text.length > max ? `${text.slice(0, max - 2)}..` : text;
-  context.fillText(label.toUpperCase(), canvas.width / 2, canvas.height / 2);
+  const label = (text.length > max ? `${text.slice(0, max - 2)}..` : text).toUpperCase();
+  if (!compact) {
+    // District names ride on a paper tag so they stay legible over rooftops
+    // of the same olive family.
+    const plateWidth = Math.min(canvas.width - 4, context.measureText(label).width + 30);
+    const plateHeight = 46;
+    const plateX = (canvas.width - plateWidth) / 2;
+    const plateY = (canvas.height - plateHeight) / 2;
+    context.fillStyle = palette.paperCss;
+    context.fillRect(plateX, plateY, plateWidth, plateHeight);
+    context.lineWidth = 3;
+    context.strokeStyle = palette.ink;
+    context.strokeRect(plateX, plateY, plateWidth, plateHeight);
+  }
+  context.fillStyle = palette.ink;
+  context.fillText(label, canvas.width / 2, canvas.height / 2);
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -155,16 +195,53 @@ function populateLayout(engine: SceneEngine, layout: RepositoryLayout) {
     .sort((left, right) => right.node.depth - left.node.depth)
     .slice(0, MAX_FILE_LABELS)
     .map((module) => module.node.id);
-  const labelFiles = new Set(fileIds);
+
+  // District name tags orient the whole field: platforms whose children are
+  // rendered get a floating region tag, unpacked leaf districts get a tag on
+  // their slab; tiny footprints stay quiet so tags never outnumber shapes.
+  const renderedParents = new Set<string>();
+  for (const module of layout.modules) {
+    const id = module.node.id;
+    const slash = id.lastIndexOf("/");
+    renderedParents.add(slash === -1 ? "." : id.slice(0, slash));
+  }
+  const labelModes = new Map<string, LabelMode>();
+  for (const module of layout.modules) {
+    if (!isMapPlaceName(module.node)) continue;
+    if (renderedParents.has(module.node.id)) {
+      if (module.width >= 5) labelModes.set(module.node.id, "region");
+    }
+  }
+  const slabIds = layout.modules
+    .filter(
+      (module) =>
+        isMapPlaceName(module.node) &&
+        !renderedParents.has(module.node.id) &&
+        module.width >= 3.2,
+    )
+    .sort((left, right) => right.width - left.width)
+    .slice(0, MAX_DISTRICT_LABELS)
+    .map((module) => module.node.id);
+  for (const id of slabIds) labelModes.set(id, "slab");
+  for (const id of fileIds) labelModes.set(id, "file");
 
   for (const module of layout.modules) {
-    const visual = createModuleVisual(palette, module, labelFiles.has(module.node.id));
+    const visual = createModuleVisual(palette, module, labelModes.get(module.node.id) ?? null);
     engine.modulesGroup.add(visual.group);
     engine.hitTargets.push(visual.mesh);
     engine.visuals.set(module.node.id, visual);
   }
 
   const maxImportWeight = Math.max(1, ...layout.imports.map((flow) => flow.weight));
+  // Emphasis normalizes against the 85th-percentile weight, not the maximum:
+  // one outlier flow must not flatten the rest of the top tier into the tail.
+  const sortedWeights = layout.imports.map((flow) => flow.weight).sort((a, b) => a - b);
+  const emphasisScale = Math.max(
+    1,
+    sortedWeights[Math.min(sortedWeights.length - 1, Math.floor(sortedWeights.length * 0.85))] ??
+      1,
+  );
+  const arteries = arteryKeys(layout.imports);
   const importSourceColor = new THREE.Color(palette.importSource);
   const importTargetColor = new THREE.Color(palette.importTarget);
   for (const flow of layout.imports) {
@@ -194,7 +271,11 @@ function populateLayout(engine: SceneEngine, layout: RepositoryLayout) {
     }
     geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
 
-    const baseOpacity = 0.55 + 0.35 * (flow.weight / maxImportWeight);
+    // Quiet by default, but not flat: the squared weight curve keeps the long
+    // tail of light arcs as faint context while the top tier of flows stays
+    // boldly readable with no hover — the field's main story at rest.
+    const weightRatio = Math.min(1, flow.weight / emphasisScale);
+    const baseOpacity = 0.15 + 0.55 * weightRatio * weightRatio;
     const tubeMaterial = new THREE.MeshBasicMaterial({
       vertexColors: true,
       transparent: true,
@@ -230,6 +311,8 @@ function populateLayout(engine: SceneEngine, layout: RepositoryLayout) {
       source: flow.source,
       target: flow.target,
       weight: flow.weight,
+      weightRatio,
+      artery: arteries.has(flowKey(flow)),
       group: arc,
       materials: [tubeMaterial, headMaterial],
       baseOpacity,
@@ -240,7 +323,7 @@ function populateLayout(engine: SceneEngine, layout: RepositoryLayout) {
 function createModuleVisual(
   palette: MapPalette,
   module: LayoutModule,
-  labelFile = false,
+  labelMode: LabelMode | null,
 ): SceneVisual {
   const geometry = new THREE.BoxGeometry(module.width, module.height, module.depth);
   const baseColor =
@@ -273,7 +356,7 @@ function createModuleVisual(
 
   let label = null;
   if (
-    labelFile &&
+    labelMode === "file" &&
     module.node.kind !== "repository" &&
     module.node.kind !== "directory"
   ) {
@@ -282,6 +365,19 @@ function createModuleVisual(
       const width = Math.max(1.4, Math.min(2.8, module.width * 0.9));
       label.sprite.scale.set(width, width * 0.21, 1);
       label.sprite.position.set(0, module.height + 0.34, 0);
+      group.add(label.sprite);
+    }
+  } else if (labelMode === "region" || labelMode === "slab") {
+    label = createLabel(palette, module.node.name, "district");
+    if (label) {
+      // Region tags float above their platform's towers; slab tags sit just
+      // over the slab's roof. Both scale with the footprint they name.
+      const width =
+        labelMode === "region"
+          ? THREE.MathUtils.clamp(module.width * 0.5, 3.4, 8.5)
+          : THREE.MathUtils.clamp(module.width * 0.7, 2.4, 4.6);
+      label.sprite.scale.set(width, width * 0.1875, 1);
+      label.sprite.position.set(0, module.height + (labelMode === "region" ? 2.3 : 0.45), 0);
       group.add(label.sprite);
     }
   }
@@ -294,11 +390,17 @@ function createModuleVisual(
     wire,
     label: label?.material ?? null,
     baseColor,
+    width: module.width,
+    depth: module.depth,
+    height: module.height,
   };
 }
 
 const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
-  function RepositoryScene({ graph, selectedId, searchQuery, layers, maxDepth, onSelect }, ref) {
+  function RepositoryScene(
+    { graph, selectedId, openedId = null, searchQuery, layers, maxDepth, onSelect, animateCamera = true },
+    ref,
+  ) {
     const mountRef = useRef<HTMLDivElement>(null);
     const engineRef = useRef<SceneEngine | null>(null);
     const sceneControlsRef = useRef<RepositorySceneHandle | null>(null);
@@ -307,17 +409,18 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
     const searchQueryRef = useRef(searchQuery);
     const layersRef = useRef(layers);
     const onSelectRef = useRef(onSelect);
+    const animateCameraRef = useRef(animateCamera);
     const [hoveredNode, setHoveredNode] = useState<RepositoryNode | null>(null);
     const [hoveredFlow, setHoveredFlow] = useState<HoveredFlow | null>(null);
     const [sceneError, setSceneError] = useState<string | null>(null);
 
     const revealedKey = useMemo(
-      () => [...revealedForSelection(graph, selectedId, maxDepth)].sort().join("\0"),
-      [graph, selectedId, maxDepth],
+      () => [...revealedForSelection(graph, openedId, maxDepth)].sort().join("\0"),
+      [graph, openedId, maxDepth],
     );
     const layout = useMemo(
-      () => buildRepositoryLayout(graph, maxDepth, selectedId),
-      // A selection that does not open hidden children must not rebuild the field.
+      () => buildRepositoryLayout(graph, maxDepth, openedId),
+      // Only opening a district rebuilds the field; selection never does.
       [graph, maxDepth, revealedKey],
     );
     const layoutRef = useRef(layout);
@@ -335,7 +438,8 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
 
     useEffect(() => {
       onSelectRef.current = onSelect;
-    }, [onSelect]);
+      animateCameraRef.current = animateCamera;
+    }, [onSelect, animateCamera]);
 
     useEffect(() => {
       const mount = mountRef.current;
@@ -372,6 +476,9 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
       controls.screenSpacePanning = true;
       controls.minZoom = 0.35;
       controls.maxZoom = 8;
+      // The field has no underside: stop the orbit just above the horizon so
+      // a vertical drag can never flip the map to its unlit belly.
+      controls.maxPolarAngle = Math.PI * 0.47;
 
       const cameraPosition = new THREE.Vector3(
         world.extent * 1.25,
@@ -428,6 +535,7 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
           renderer.render(scene, camera);
         },
         updateVisuals: () => undefined,
+        frameSelection: () => undefined,
       };
 
       function render() {
@@ -467,29 +575,55 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
           if (visual.label) visual.label.opacity = query && !matches ? 0.22 : 1;
         }
 
-        const selected = selectedIdRef.current;
-        // A selected district's arcs attach to its revealed children, so an
-        // endpoint inside the selection counts (ids are paths). The root is
+        // A selection deeper than the rendered grain (picked from the index,
+        // or inside a still-closed district) lights its nearest rendered
+        // ancestor's arcs instead of nothing.
+        let selected = selectedIdRef.current;
+        while (selected && selected !== "." && !engine.visuals.has(selected)) {
+          selected = parentPath(selected);
+        }
+        // A focused district's arcs attach to its revealed children, so an
+        // endpoint inside the anchor counts (ids are paths). The root is
         // everything's ancestor; emphasizing all arcs would emphasize none.
-        const inSelection = (id: string) =>
-          selected !== null &&
-          selected !== "." &&
-          (id === selected || id.startsWith(`${selected}/`));
-        const selectionHasFlow = engine.importVisuals.some(
-          (flow) => inSelection(flow.source) || inSelection(flow.target),
-        );
+        const under = (id: string, anchor: string | null) =>
+          anchor !== null &&
+          anchor !== "." &&
+          (id === anchor || id.startsWith(`${anchor}/`));
+        const focused = selected !== null && selected !== ".";
+        const hoverAnchor =
+          engine.hoveredId && engine.hoveredId !== "." ? engine.hoveredId : null;
+        // Survey scale is a transit map: only arteries stay on. A hover or
+        // selection reveals the streets that cross that district; inner
+        // wiring of a selection stays at base; unrelated arteries drop to
+        // faint city context; everything else is off.
         for (const [index, flow] of engine.importVisuals.entries()) {
           const source = engine.visuals.get(flow.source);
           const target = engine.visuals.get(flow.target);
-          flow.group.visible =
-            layersRef.current.imports && Boolean(source?.group.visible && target?.group.visible);
-          const touchesSelection = inSelection(flow.source) || inSelection(flow.target);
-          const hot = index === engine.hoveredFlowIndex || touchesSelection;
-          // A selection's flow must dominate: unrelated arcs drop to a faint
-          // context layer and hot arcs draw over rooftops and dim arcs alike.
-          const opacity = hot ? 1 : selectionHasFlow ? flow.baseOpacity * 0.12 : flow.baseOpacity;
+          const endpointsOn = Boolean(source?.group.visible && target?.group.visible);
+          const sourceSelected = under(flow.source, selected);
+          const targetSelected = under(flow.target, selected);
+          const sourceHover = under(flow.source, hoverAnchor);
+          const targetHover = under(flow.target, hoverAnchor);
+          const inner = focused && sourceSelected && targetSelected;
+          const hot =
+            index === engine.hoveredFlowIndex ||
+            (focused && sourceSelected !== targetSelected) ||
+            (hoverAnchor !== null && sourceHover !== targetHover);
+          const show = layersRef.current.imports && endpointsOn && (hot || inner || flow.artery);
+          flow.group.visible = show;
+          if (!show) continue;
+          const opacity =
+            index === engine.hoveredFlowIndex
+              ? 1
+              : hot
+                ? 0.55 + 0.45 * flow.weightRatio
+                : inner
+                  ? flow.baseOpacity
+                  : focused
+                    ? flow.baseOpacity * 0.22
+                    : flow.baseOpacity;
           for (const material of flow.materials) material.opacity = opacity;
-          for (const child of flow.group.children) child.renderOrder = hot ? 3 : 1;
+          for (const child of flow.group.children) child.renderOrder = hot ? 3 : inner ? 2 : 1;
         }
         render();
       }
@@ -536,7 +670,88 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
         updateVisuals();
       }
 
+      let viewHeight = world.extent * 1.46;
+      let flyRaf = 0;
+      const surveyTarget = new THREE.Vector3(0, 0, 0);
+
+      function cancelFly() {
+        if (flyRaf) {
+          cancelAnimationFrame(flyRaf);
+          flyRaf = 0;
+        }
+      }
+
+      // Framing pans and zooms but never reorients: the offset comes from the
+      // camera's live pose, so the user's orbit angle survives every flight.
+      // Only an explicit reset restores the canonical survey angle.
+      function applyPose(target: THREE.Vector3, zoom: number) {
+        const offset = camera.position.clone().sub(controls.target);
+        controls.target.copy(target);
+        camera.position.copy(target).add(offset);
+        camera.zoom = zoom;
+        camera.updateProjectionMatrix();
+        controls.update();
+        render();
+      }
+
+      function framingPose(id: string | null): { id: string; target: THREE.Vector3; zoom: number } {
+        const byId = new Map<string, Frameable>();
+        for (const [visualId, visual] of engine.visuals) {
+          byId.set(visualId, { node: visual.node, width: visual.width, depth: visual.depth });
+        }
+        const chosenId = framingTargetId(id, byId);
+        if (chosenId === ".") {
+          return { id: ".", target: surveyTarget.clone(), zoom: SURVEY_ZOOM };
+        }
+        const visual = engine.visuals.get(chosenId);
+        if (!visual) {
+          return { id: ".", target: surveyTarget.clone(), zoom: SURVEY_ZOOM };
+        }
+        return {
+          id: chosenId,
+          target: new THREE.Vector3(visual.group.position.x, 0, visual.group.position.z),
+          zoom: framingZoom(viewHeight, Math.max(visual.width, visual.depth), controls.maxZoom),
+        };
+      }
+
+      function frameSelection(id: string | null) {
+        const pose = framingPose(id);
+        const fromTarget = controls.target.clone();
+        const fromZoom = camera.zoom;
+        if (poseAlreadyFramed(fromTarget, fromZoom, pose.target, pose.zoom)) {
+          applyPose(pose.target, pose.zoom);
+          return;
+        }
+        cancelFly();
+        const reduced =
+          !animateCameraRef.current ||
+          window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        if (reduced) {
+          applyPose(pose.target, pose.zoom);
+          return;
+        }
+        const fromPos = camera.position.clone();
+        const toPos = pose.target.clone().add(fromPos.clone().sub(fromTarget));
+        const start = performance.now();
+        function step(now: number) {
+          const t = Math.min(1, (now - start) / FLY_MS);
+          const ease = 1 - (1 - t) ** 3;
+          controls.target.lerpVectors(fromTarget, pose.target, ease);
+          camera.position.lerpVectors(fromPos, toPos, ease);
+          camera.zoom = fromZoom + (pose.zoom - fromZoom) * ease;
+          camera.updateProjectionMatrix();
+          controls.update();
+          render();
+          if (t < 1) flyRaf = requestAnimationFrame(step);
+          else flyRaf = 0;
+        }
+        flyRaf = requestAnimationFrame(step);
+      }
+
+      engine.frameSelection = frameSelection;
+
       function handlePointerDown(event: PointerEvent) {
+        cancelFly();
         pointerDown = { x: event.clientX, y: event.clientY };
       }
 
@@ -544,7 +759,10 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
         if (Math.hypot(event.clientX - pointerDown.x, event.clientY - pointerDown.y) > 5) return;
         const hit = pointFromEvent(event);
         const nextId = hit?.object.userData.nodeId ?? null;
-        if (nextId) onSelectRef.current(nextId);
+        if (nextId) {
+          engine.frameSelection(nextId);
+          onSelectRef.current(nextId);
+        }
       }
 
       function handlePointerLeave() {
@@ -559,11 +777,11 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
         const width = Math.max(1, host.clientWidth);
         const height = Math.max(1, host.clientHeight);
         const aspect = width / height;
-        const fittedHeight = world.extent * 1.46 * (aspect < 1 ? 1 / aspect : 1);
-        camera.left = (-fittedHeight * aspect) / 2;
-        camera.right = (fittedHeight * aspect) / 2;
-        camera.top = fittedHeight / 2;
-        camera.bottom = -fittedHeight / 2;
+        viewHeight = world.extent * 1.46 * (aspect < 1 ? 1 / aspect : 1);
+        camera.left = (-viewHeight * aspect) / 2;
+        camera.right = (viewHeight * aspect) / 2;
+        camera.top = viewHeight / 2;
+        camera.bottom = -viewHeight / 2;
         camera.updateProjectionMatrix();
         renderer.setSize(width, height, false);
         render();
@@ -577,8 +795,9 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
 
       sceneControlsRef.current = {
         resetCamera: () => {
+          cancelFly();
           camera.position.copy(cameraPosition);
-          camera.zoom = 1;
+          camera.zoom = SURVEY_ZOOM;
           controls.target.set(0, 0, 0);
           controls.update();
           camera.updateProjectionMatrix();
@@ -600,6 +819,7 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
       updateVisuals();
 
       return () => {
+        cancelFly();
         syncVisualsRef.current = null;
         sceneControlsRef.current = null;
         engineRef.current = null;
@@ -649,21 +869,37 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
     }, [layout]);
 
     useEffect(() => {
-      selectedIdRef.current = selectedId;
       searchQueryRef.current = searchQuery;
       layersRef.current = layers;
       syncVisualsRef.current?.();
-    }, [layers.config, layers.docs, layers.imports, layers.source, layers.structure, searchQuery, selectedId]);
+    }, [
+      layers.config,
+      layers.docs,
+      layers.imports,
+      layers.source,
+      layers.structure,
+      layers.tests,
+      searchQuery,
+    ]);
+
+    useEffect(() => {
+      selectedIdRef.current = selectedId;
+      syncVisualsRef.current?.();
+      engineRef.current?.frameSelection(selectedId);
+    }, [selectedId]);
+
+    const hoverReadout = hoveredNode ? sceneReadout(hoveredNode) : null;
 
     return (
       <div className="scene-mount" ref={mountRef}>
         {sceneError ? <p className="scene-error">{sceneError}</p> : null}
-        {hoveredNode ? (
+        {hoverReadout ? (
           <div className="scene-readout" aria-hidden="true">
-            <span>
-              {scaleOf(hoveredNode)} · {hoveredNode.kind}
-            </span>
-            <strong>{hoveredNode.path === "." ? hoveredNode.name : hoveredNode.path}</strong>
+            <span>{hoverReadout.kicker}</span>
+            <strong>{hoverReadout.title}</strong>
+            {hoverReadout.summary ? (
+              <p className="scene-readout-summary">{hoverReadout.summary}</p>
+            ) : null}
           </div>
         ) : hoveredFlow ? (
           <div className="scene-readout" aria-hidden="true">

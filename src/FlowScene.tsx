@@ -1,6 +1,13 @@
 import { useMemo, useRef, useState } from "react";
 import type { LayerVisibility, RepositoryGraph, RepositoryNode } from "./model";
-import { buildFlowLayout, chipContents, type FlowChip } from "./flowLayout";
+import {
+  buildFlowLayout,
+  chipContents,
+  chipForSelection,
+  flowStatus,
+  isSupportCell,
+  type FlowChip,
+} from "./flowLayout";
 import type { ImportFlow } from "./repositoryLayout";
 import RepositoryScene from "./RepositoryScene";
 
@@ -84,12 +91,14 @@ function trace(id: string, edges: ImportFlow[]) {
   return { chips, hot };
 }
 
-// All layers stay on in the inset; the main map view keeps the layer toggles.
+// The inset ignores the main map's layer toggles but matches its default:
+// everything on except tests.
 const MINI_LAYERS: LayerVisibility = {
   structure: true,
   source: true,
   config: true,
   docs: true,
+  tests: false,
   imports: true,
 };
 
@@ -146,9 +155,11 @@ function MiniMap({ graph, node, searchQuery, depth, onSelect }: MiniMapProps) {
         <RepositoryScene
           graph={graph}
           selectedId={node.id}
+          openedId={node.id}
           searchQuery={searchQuery}
           layers={MINI_LAYERS}
           maxDepth={depth}
+          animateCamera={false}
           onSelect={(id) => {
             if (id) onSelect(id);
           }}
@@ -174,7 +185,7 @@ function FlowScene({ graph, selectedId, searchQuery, maxDepth, onSelect }: FlowS
     [graph, selectedId],
   );
   const validId = (id: string | null) => (id !== null && chipById.has(id) ? id : null);
-  const traceId = validId(hoveredId) ?? validId(selectedId);
+  const traceId = validId(hoveredId) ?? chipForSelection(selectedId, chipById);
   const active = useMemo(
     () => (traceId ? trace(traceId, layout.edges) : null),
     [traceId, layout],
@@ -188,7 +199,8 @@ function FlowScene({ graph, selectedId, searchQuery, maxDepth, onSelect }: FlowS
     return counts;
   }, [graph]);
 
-  if (!graph.stats.importsAvailable) {
+  const status = flowStatus(graph.stats.importsAvailable, layout.edges.length);
+  if (status === "unavailable") {
     return (
       <div className="flow-empty">
         <span className="section-index">Flow / unavailable</span>
@@ -199,7 +211,7 @@ function FlowScene({ graph, selectedId, searchQuery, maxDepth, onSelect }: FlowS
       </div>
     );
   }
-  if (layout.edges.length === 0) {
+  if (status === "quiet") {
     return (
       <div className="flow-empty">
         <span className="section-index">Flow / quiet</span>
@@ -402,7 +414,7 @@ function FlowScene({ graph, selectedId, searchQuery, maxDepth, onSelect }: FlowS
                   const y = CHIP_HEADER + cell.y;
                   const labeled = cell.width >= 40 && cell.height >= 14;
                   return (
-                    <g key={cell.node.id}>
+                    <g key={cell.node.id} className={isSupportCell(cell.node) ? "chip-support" : undefined}>
                       <rect
                         className={`chip-cell chip-${cell.node.kind}`}
                         data-child-id={cell.node.id}

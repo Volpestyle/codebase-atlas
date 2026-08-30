@@ -67,6 +67,9 @@ const defaultLayers: LayerVisibility = {
   source: true,
   config: true,
   docs: true,
+  // Test files and directories are scaffolding around the story the map
+  // tells; the layer exists but starts hidden.
+  tests: false,
   imports: true,
 };
 
@@ -254,6 +257,9 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // The district deliberately broken open (second click on the selection);
+  // selection alone never changes what the map renders.
+  const [openedId, setOpenedId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [layers, setLayers] = useState<LayerVisibility>(defaultLayers);
   const [depth, setDepth] = useState(DEFAULT_MAP_DEPTH);
@@ -290,6 +296,7 @@ function App() {
         nextGraph.nodes[0]?.id ??
         null,
     );
+    setOpenedId(null);
     setSearchQuery("");
     setInspectorTab("overview");
     setInspectorOpen(false);
@@ -373,9 +380,21 @@ function App() {
   useEffect(() => {
     function handleKeyboard(event: globalThis.KeyboardEvent) {
       if (event.key === "Escape") {
-        setRailOpen(false);
+        // Each press peels one layer: dialog, mobile rail, then the opened
+        // district backs out to its closed slab.
+        if (githubDialogOpen) {
+          setGitHubDialogOpen(false);
+          return;
+        }
+        if (railOpen) {
+          setRailOpen(false);
+          return;
+        }
+        if (openedId) {
+          closeOpened();
+          return;
+        }
         setInspectorOpen(false);
-        setGitHubDialogOpen(false);
         return;
       }
 
@@ -404,7 +423,7 @@ function App() {
 
     window.addEventListener("keydown", handleKeyboard);
     return () => window.removeEventListener("keydown", handleKeyboard);
-  }, []);
+  });
 
   function openMapFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.currentTarget.files?.[0];
@@ -460,9 +479,28 @@ function App() {
   }
 
   function selectNode(id: string | null) {
-    setSelectedId(id);
+    // Progressive disclosure: the first click on a module selects it — frames
+    // it and lights its connections at the current survey grain — and a
+    // second click on the same module breaks it open. Selecting anything
+    // outside the opened district (an ancestor, a sibling, empty ground)
+    // closes it again: one district decomposed at a time.
+    if (id !== null && id === selectedId) {
+      setOpenedId(id);
+    } else {
+      setSelectedId(id);
+      const inside =
+        id !== null && openedId !== null && (id === openedId || id.startsWith(`${openedId}/`));
+      if (!inside) setOpenedId(null);
+    }
     setInspectorTab("overview");
     setInspectorOpen(Boolean(id));
+  }
+
+  function closeOpened() {
+    // Backing out lifts the selection to the district that just closed, so
+    // the inspector and camera land on the whole rather than a hidden child.
+    setSelectedId(openedId);
+    setOpenedId(null);
   }
 
   function toggleLayer(layer: LayerName) {
@@ -500,8 +538,14 @@ function App() {
       label: "Documentation",
       nodes: filteredNodes.filter((node) => layerForNode(node) === "docs"),
     },
+    {
+      key: "tests",
+      label: "Tests",
+      nodes: filteredNodes.filter((node) => layerForNode(node) === "tests"),
+    },
   ];
   const selectedNode = graph?.nodes.find((node) => node.id === selectedId) ?? null;
+  const openedNode = graph?.nodes.find((node) => node.id === openedId) ?? null;
   const trail = graph && selectedNode ? ancestry(graph, selectedNode.id) : [];
   const focusScale = selectedNode ? scaleOf(selectedNode) : null;
   const surveyDepth = depth >= MAX_MAP_DEPTH ? Number.POSITIVE_INFINITY : depth;
@@ -897,6 +941,17 @@ function App() {
                   {focusScale ? (
                     <ScaleLadder current={focusScale} trail={trail} onSelect={selectNode} />
                   ) : null}
+                  {openedNode ? (
+                    <Seg plate className="close-opened">
+                      <button
+                        type="button"
+                        onClick={closeOpened}
+                        title={`Close ${openedNode.path} and back out (Esc)`}
+                      >
+                        ✕ close {openedNode.name}
+                      </button>
+                    </Seg>
+                  ) : null}
                 </div>
                 {view === "map" ? (
                   <Seg plate className="camera-controls">
@@ -933,6 +988,7 @@ function App() {
                     ref={sceneRef}
                     graph={graph}
                     selectedId={selectedId}
+                    openedId={openedId}
                     searchQuery={searchQuery}
                     layers={layers}
                     maxDepth={depth >= MAX_MAP_DEPTH ? Number.POSITIVE_INFINITY : depth}
@@ -941,6 +997,7 @@ function App() {
                   <div className="axis-key" aria-hidden="true">
                     <span>Y + area / code volume</span>
                     <span>X-Z / containment</span>
+                    <span>Arcs / major import routes</span>
                   </div>
                 </>
               ) : (
@@ -1279,7 +1336,7 @@ function App() {
         <p>
           {view === "map" ? (
             <>
-              Drag to orbit · click a district to look inside · trail and scale show how deep you are · <kbd>G</kbd> GitHub · <kbd>/</kbd> search · <kbd>0</kbd> reset
+              Drag to orbit · click a district to go there · click it again to look inside · <kbd>esc</kbd> backs out · <kbd>/</kbd> search · <kbd>0</kbd> reset
             </>
           ) : (
             <>

@@ -48,11 +48,34 @@ export interface RepositoryGraph {
   warnings: string[];
 }
 
-export type LayerName = "structure" | "source" | "config" | "docs" | "imports";
+export type LayerName = "structure" | "source" | "config" | "docs" | "tests" | "imports";
 
 export type LayerVisibility = Record<LayerName, boolean>;
 
+// Directories that hold a module's support material rather than its substance.
+// The flow view mutes their chip cells; the map classifies everything under
+// them into the tests layer.
+export const SUPPORT_DIR_NAMES = new Set([
+  "test",
+  "tests",
+  "__tests__",
+  "spec",
+  "specs",
+  "e2e",
+  "fixtures",
+  "__mocks__",
+]);
+
+const TEST_FILE_PATTERN = /(\.(test|spec)|_test)\.[^.]+$/;
+
+export function isTestNode(node: RepositoryNode): boolean {
+  if (node.kind === "repository") return false;
+  if (TEST_FILE_PATTERN.test(node.name)) return true;
+  return node.path.split("/").some((segment) => SUPPORT_DIR_NAMES.has(segment.toLowerCase()));
+}
+
 export function layerForNode(node: RepositoryNode): LayerName {
+  if (isTestNode(node)) return "tests";
   if (node.kind === "repository" || node.kind === "directory") return "structure";
   if (node.kind === "config") return "config";
   if (node.kind === "documentation") return "docs";

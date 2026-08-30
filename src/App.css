@@ -670,6 +670,20 @@ kbd {
   white-space: nowrap;
 }
 
+.scene-readout-summary {
+  max-width: 320px;
+  margin: 3px 0 0;
+  color: var(--ink);
+  font-size: var(--fs-small);
+  letter-spacing: 0;
+  text-transform: none;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .render-cap {
   right: 18px;
   bottom: 18px;
@@ -1737,6 +1751,15 @@ body.is-resizing-panels * {
   font-weight: 600;
   letter-spacing: 0.04em;
   pointer-events: none;
+}
+
+.flow-chip .chip-support .chip-cell {
+  fill-opacity: 0.35;
+}
+
+.flow-chip .chip-support .chip-cell-label {
+  fill: var(--olive);
+  font-weight: 500;
 }
 
 .flow-chip.is-selected .chip-plate {

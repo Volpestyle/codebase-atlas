@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildFlowLayout, chipContents, MAX_FLOW_NODES } from "../src/flowLayout.ts";
+import {
+  buildFlowLayout,
+  chipContents,
+  chipForSelection,
+  flowStatus,
+  MAX_FLOW_NODES,
+} from "../src/flowLayout.ts";
 import type { RepositoryEdge, RepositoryGraph, RepositoryNode } from "../src/model.ts";
 
 function node(overrides: Partial<RepositoryNode> & { id: string }): RepositoryNode {
@@ -216,4 +222,39 @@ test("chip interiors pack children by weight into the extra tile area", () => {
     assert.ok(cell.y + cell.height <= 120 + 1e-6);
   }
   assert.equal(chipContents(graph, "app/big.ts", 200, 120).length, 0, "files have no interior");
+});
+
+test("chip interiors look through wrapper directories to their children", () => {
+  const graph = graphOf(
+    [
+      node({ id: ".", kind: "repository" }),
+      node({ id: "app", kind: "directory", lines: 90 }),
+      node({ id: "app/src", kind: "directory", lines: 70 }),
+      node({ id: "app/src/captain", kind: "directory", lines: 40 }),
+      node({ id: "app/src/api.ts", lines: 30 }),
+      node({ id: "app/test", kind: "directory", lines: 20 }),
+    ],
+    containsChain(["app", "app/src", "app/src/captain", "app/src/api.ts", "app/test"]),
+  );
+
+  const cells = chipContents(graph, "app", 200, 120);
+  const ids = new Set(cells.map((cell) => cell.node.id));
+  assert.ok(!ids.has("app/src"), "the src wrapper itself is not a cell");
+  assert.ok(ids.has("app/src/captain") && ids.has("app/src/api.ts"), "src's children are cells");
+  assert.ok(ids.has("app/test"), "non-wrapper directories stay as their own cell");
+});
+
+test("a file or src selection traces through the nearest chip", () => {
+  const chips = new Set(["app", "lib"]);
+  assert.equal(chipForSelection("app/src/main.ts", chips), "app");
+  assert.equal(chipForSelection("app/src", chips), "app");
+  assert.equal(chipForSelection("app", chips), "app");
+  assert.equal(chipForSelection("orphan/file.ts", chips), null);
+  assert.equal(chipForSelection(null, chips), null);
+});
+
+test("flow stays unavailable without import data and quiet with none at this depth", () => {
+  assert.equal(flowStatus(false, 12), "unavailable");
+  assert.equal(flowStatus(true, 0), "quiet");
+  assert.equal(flowStatus(true, 4), "ready");
 });

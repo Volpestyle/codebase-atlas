@@ -1,9 +1,32 @@
-import type { RepositoryGraph, RepositoryNode } from "./model";
+import { SUPPORT_DIR_NAMES, type RepositoryGraph, type RepositoryNode } from "./model.ts";
 // The .ts extension keeps this importable by the node:test runner, which
 // strips types but does not resolve extensionless value imports.
+import { isWrapperNode, parentPath } from "./placeNames.ts";
 import { aggregateImports, packTreemap, type ImportFlow } from "./repositoryLayout.ts";
 
 export const MAX_CHIP_CELLS = 16;
+
+// A map selection finer than a chip (a file, a src wrapper) still traces
+// through the nearest chip that is on the diagram.
+export function chipForSelection(
+  id: string | null,
+  chips: { has(id: string): boolean },
+): string | null {
+  let current: string | null = id;
+  while (current) {
+    if (chips.has(current)) return current;
+    current = parentPath(current);
+  }
+  return null;
+}
+
+export type FlowStatus = "ready" | "unavailable" | "quiet";
+
+export function flowStatus(importsAvailable: boolean, edgeCount: number): FlowStatus {
+  if (!importsAvailable) return "unavailable";
+  if (edgeCount === 0) return "quiet";
+  return "ready";
+}
 
 // Chips carry readable labels; past this count a diagram stops being one.
 export const MAX_FLOW_NODES = 220;
@@ -140,7 +163,15 @@ function contentWeight(node: RepositoryNode, lineCountAvailable: boolean) {
   return Math.max(1, value);
 }
 
-// Direct children packed into a chip's extra area, heaviest first.
+// Support directories every module repeats (tests, fixtures) stay area-honest
+// in a chip but render muted so the functional parts carry it.
+export function isSupportCell(node: RepositoryNode): boolean {
+  return node.kind === "directory" && SUPPORT_DIR_NAMES.has(node.name.toLowerCase());
+}
+
+// A chip's contents packed into its extra area, heaviest first. Wrapper
+// directories (src, lib) are replaced by their own children so cells name the
+// module's actual parts instead of the same src/test pair on every chip.
 export function chipContents(
   graph: RepositoryGraph,
   parentId: string,
@@ -150,11 +181,23 @@ export function chipContents(
 ): ChipCell[] {
   if (width < 8 || height < 8) return [];
   const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
-  const children: RepositoryNode[] = [];
+  const childrenOf = new Map<string, RepositoryNode[]>();
   for (const edge of graph.edges) {
-    if (edge.kind !== "contains" || edge.source !== parentId) continue;
+    if (edge.kind !== "contains") continue;
     const child = nodeById.get(edge.target);
-    if (child) children.push(child);
+    if (!child) continue;
+    childrenOf.set(edge.source, [...(childrenOf.get(edge.source) ?? []), child]);
+  }
+  let children = childrenOf.get(parentId) ?? [];
+  for (let pass = 0; pass < 3; pass += 1) {
+    let changed = false;
+    children = children.flatMap((child) => {
+      const lifted = isWrapperNode(child) ? (childrenOf.get(child.id) ?? []) : [];
+      if (lifted.length === 0) return [child];
+      changed = true;
+      return lifted;
+    });
+    if (!changed) break;
   }
   if (children.length === 0) return [];
   const ranked = [...children].sort(

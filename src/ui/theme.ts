@@ -14,6 +14,8 @@ function tokenHex(name: string): number {
 
 export interface MapPalette {
   paper: number;
+  /** --paper as a CSS string for canvas label plates. */
+  paperCss: string;
   ink: string;
   rust: number;
   outline: number;
@@ -32,6 +34,7 @@ export interface MapPalette {
 export function mapPalette(): MapPalette {
   return {
     paper: tokenHex("--paper"),
+    paperCss: token("--paper"),
     ink: token("--ink"),
     rust: tokenHex("--rust"),
     outline: tokenHex("--map-outline"),

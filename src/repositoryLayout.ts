@@ -21,6 +21,26 @@ export interface ImportFlow {
   weight: number;
 }
 
+export function flowKey(flow: Pick<ImportFlow, "source" | "target">) {
+  return `${flow.source}\0${flow.target}`;
+}
+
+// Survey-scale transit: only the heaviest routes stay on the map at rest.
+export const MAX_ARTERY_ROUTES = 12;
+
+export function arteryKeys(
+  flows: ImportFlow[],
+  limit: number = MAX_ARTERY_ROUTES,
+): Set<string> {
+  const ranked = [...flows].sort(
+    (left, right) =>
+      right.weight - left.weight ||
+      left.source.localeCompare(right.source) ||
+      left.target.localeCompare(right.target),
+  );
+  return new Set(ranked.slice(0, limit).map(flowKey));
+}
+
 export interface RepositoryLayout {
   modules: LayoutModule[];
   imports: ImportFlow[];
@@ -228,18 +248,20 @@ export function revealedForSelection(
   return revealed;
 }
 
+// `openedId` is the district deliberately broken open (a second click on the
+// selection); plain selection never changes what the field renders.
 export function buildRepositoryLayout(
   graph: RepositoryGraph,
   maxDepth: number = Number.POSITIVE_INFINITY,
-  selectedId: string | null = null,
+  openedId: string | null = null,
 ): RepositoryLayout {
   const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
   const { parentOf, childrenOf: allChildren } = containmentMaps(graph);
-  const extraIds = revealedForSelection(graph, selectedId, maxDepth);
+  const extraIds = revealedForSelection(graph, openedId, maxDepth);
 
   const pinned = new Set<string>();
-  if (selectedId) {
-    let current: string | undefined = selectedId;
+  if (openedId) {
+    let current: string | undefined = openedId;
     while (current !== undefined) {
       const node = nodeById.get(current);
       if (node && node.depth <= maxDepth) pinned.add(current);
@@ -259,8 +281,8 @@ export function buildRepositoryLayout(
 
   const extras = graph.nodes.filter((node) => extraIds.has(node.id) && !baseIds.has(node.id));
   const chain = new Set<string>();
-  if (selectedId) {
-    let current: string | undefined = selectedId;
+  if (openedId) {
+    let current: string | undefined = openedId;
     while (current !== undefined) {
       if (extraIds.has(current)) chain.add(current);
       current = parentOf.get(current);
@@ -319,8 +341,8 @@ export function buildRepositoryLayout(
 
   // Districts: each directory's rectangle contains its children, so position
   // itself encodes the hierarchy; files are buildings sized by line count.
-  // Large cells at the survey limit still open — the nested treemap is the
-  // name, so a big empty plate never wears a title.
+  // Large cells at the survey limit still open one extra level so the
+  // interior is readable; place names live on the scene, not in packing.
   function placeChildren(parentId: string, rect: Rect, elevation: number) {
     const raw = allChildren.get(parentId) ?? [];
     if (raw.length === 0) return;

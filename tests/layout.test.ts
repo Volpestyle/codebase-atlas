@@ -1,6 +1,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildRepositoryLayout, MAX_RENDERED_NODES } from "../src/repositoryLayout.ts";
+import {
+  arteryKeys,
+  buildRepositoryLayout,
+  flowKey,
+  MAX_RENDERED_NODES,
+} from "../src/repositoryLayout.ts";
+import {
+  framingTargetId,
+  framingZoom,
+  isMapPlaceName,
+  isWrapperNode,
+  parentPath,
+  poseAlreadyFramed,
+  sceneReadout,
+  SURVEY_ZOOM,
+  type Frameable,
+} from "../src/placeNames.ts";
 import { parseRepositoryGraph } from "../src/model.ts";
 import type { RepositoryEdge, RepositoryGraph, RepositoryNode } from "../src/model.ts";
 
@@ -301,4 +317,90 @@ test("lifts unrendered file imports to their rendered ancestors with weights", (
   const renderedIds = new Set(layout.modules.map((module) => module.node.id));
   assert.ok(!renderedIds.has("app/one.ts"), "depth-2 files fall beyond the render cap");
   assert.deepEqual(layout.imports, [{ source: "app", target: "lib", weight: 2 }]);
+});
+
+test("artery keys keep the heaviest import routes", () => {
+  const flows = [
+    { source: "a", target: "core", weight: 2 },
+    { source: "b", target: "core", weight: 9 },
+    { source: "c", target: "core", weight: 4 },
+    { source: "d", target: "core", weight: 1 },
+    { source: "e", target: "core", weight: 7 },
+  ];
+  const keys = arteryKeys(flows, 3);
+  assert.equal(keys.size, 3);
+  assert.ok(keys.has(flowKey({ source: "b", target: "core" })));
+  assert.ok(keys.has(flowKey({ source: "e", target: "core" })));
+  assert.ok(keys.has(flowKey({ source: "c", target: "core" })));
+  assert.ok(!keys.has(flowKey({ source: "a", target: "core" })));
+});
+
+test("map place names skip wrappers, support dirs, and the field title", () => {
+  assert.equal(isWrapperNode(node({ id: "app/src", kind: "directory" })), true);
+  assert.equal(isMapPlaceName(node({ id: ".", kind: "repository" })), false);
+  assert.equal(isMapPlaceName(node({ id: "src", kind: "directory" })), false);
+  assert.equal(isMapPlaceName(node({ id: "app/test", kind: "directory" })), false);
+  assert.equal(isMapPlaceName(node({ id: "app/captain", kind: "directory" })), true);
+  assert.equal(parentPath("app/src/captain"), "app/src");
+  assert.equal(parentPath("app"), ".");
+  assert.equal(parentPath("."), null);
+});
+
+test("files and src wrappers frame their named parent district", () => {
+  const frame = (
+    id: string,
+    kind: RepositoryNode["kind"],
+    width: number,
+    depth: number,
+  ): [string, Frameable] => [
+    id,
+    { node: node({ id, kind }), width, depth },
+  ];
+  const byId = new Map<string, Frameable>([
+    frame(".", "repository", 40, 40),
+    frame("app", "directory", 20, 20),
+    frame("app/captain", "directory", 12, 12),
+    frame("app/captain/src", "directory", 10, 10),
+    frame("app/captain/src/main.ts", "source", 2, 2),
+    frame("app/captain/src/wide.ts", "source", 8, 8),
+    frame("app/captain/test", "directory", 8, 8),
+  ]);
+  assert.equal(framingTargetId("app/captain/src/main.ts", byId), "app/captain");
+  assert.equal(framingTargetId("app/captain/src/wide.ts", byId), "app/captain");
+  assert.equal(framingTargetId("app/captain/src", byId), "app/captain");
+  assert.equal(framingTargetId("app/captain/test", byId), "app/captain");
+  assert.equal(framingTargetId("app/captain", byId), "app/captain");
+  assert.equal(framingTargetId(".", byId), ".");
+});
+
+test("a second frame is skipped only when the camera is already on the pose", () => {
+  const target = { x: 4, y: 0, z: -3 };
+  assert.equal(poseAlreadyFramed(target, 2, target, 2), true);
+  assert.equal(
+    poseAlreadyFramed({ x: 12, y: 0, z: -3 }, 2, target, 2),
+    false,
+    "a pan off the district must re-frame",
+  );
+  assert.equal(poseAlreadyFramed(target, 4, target, 2), false, "a zoom off the district must re-frame");
+});
+
+test("framing zoom never drops below the survey view", () => {
+  assert.equal(framingZoom(50, 200), SURVEY_ZOOM, "a huge district pans, it does not pull back");
+  assert.ok(framingZoom(50, 6) > SURVEY_ZOOM, "a small named district zooms in");
+  assert.ok(framingZoom(50, 6) <= 8);
+  assert.ok(framingZoom(0, 10) >= SURVEY_ZOOM);
+});
+
+test("scene readout includes the index summary only when one exists", () => {
+  const described = node({
+    id: "app/captain",
+    kind: "directory",
+    description: "The operator console.",
+  });
+  const bare = node({ id: "app/captain", kind: "directory", description: null });
+  const blank = node({ id: "app/captain", kind: "directory", description: "  " });
+  assert.equal(sceneReadout(described).summary, "The operator console.");
+  assert.equal(sceneReadout(described).title, "app/captain");
+  assert.equal(sceneReadout(bare).summary, null);
+  assert.equal(sceneReadout(blank).summary, null);
 });
