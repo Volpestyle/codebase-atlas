@@ -20,7 +20,20 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' customprotocol: asset:; connect-src ipc: http://ipc.localhost https://api.github.com; img-src 'self' data: blob: asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; script-src 'self'"
+      "csp": "default-src 'self' customprotocol: asset:; connect-src ipc: http://ipc.localhost https://api.github.com http: https:; img-src 'self' data: blob: asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "mobile": [
+        {
+          "scheme": ["codebase-atlas"],
+          "appLink": false
+        }
+      ],
+      "desktop": {
+        "schemes": ["codebase-atlas"]
+      }
     }
   },
   "bundle": {

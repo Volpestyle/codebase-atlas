@@ -6,6 +6,18 @@ export type RepositoryNodeKind =
   | "documentation"
   | "asset";
 
+/** Declaration kinds, normalized across languages by the scanner: every
+ *  declaration is a behavior, a shape, or a value. */
+export type SymbolKind = "function" | "type" | "constant";
+
+export interface CodeSymbol {
+  name: string;
+  kind: SymbolKind;
+  /** 1-based line of the declaration. */
+  line: number;
+  exported: boolean;
+}
+
 export interface RepositoryNode {
   id: string;
   name: string;
@@ -18,12 +30,19 @@ export interface RepositoryNode {
   depth: number;
   childCount: number;
   description: string | null;
+  /** Declarations this file makes. Absent for directories, for GitHub sources,
+   *  and for languages the scanner does not parse. */
+  symbols?: CodeSymbol[];
 }
 
 export interface RepositoryEdge {
   source: string;
   target: string;
   kind: "contains" | "imports";
+  /** For an import edge, the named bindings that cross it. Absent for
+   *  containment, for side-effect and dynamic imports, and `*` for namespace
+   *  and glob imports. */
+  symbols?: string[];
 }
 
 export interface RepositoryStats {
@@ -106,6 +125,24 @@ export function parseRepositoryGraph(text: string): RepositoryGraph {
     throw new Error("This file is not a Codebase Atlas map.");
   }
   return graph;
+}
+
+/** Whether any part of a node's declared surface matches a search term. */
+export function matchesSymbol(node: RepositoryNode, query: string): boolean {
+  return Boolean(node.symbols?.some((symbol) => symbol.name.toLowerCase().includes(query)));
+}
+
+// Bindings crossing an import edge, bounded so one wide module cannot push a
+// register row into a paragraph.
+const MAX_CROSSING_SYMBOLS = 6;
+
+/** Reads the bindings crossing an edge as one line, longest lists elided. */
+export function crossingLabel(symbols: Iterable<string>): string | null {
+  const names = [...symbols].sort();
+  if (names.length === 0) return null;
+  if (names.length <= MAX_CROSSING_SYMBOLS) return names.join(", ");
+  const shown = names.slice(0, MAX_CROSSING_SYMBOLS).join(", ");
+  return `${shown} +${names.length - MAX_CROSSING_SYMBOLS}`;
 }
 
 export function formatBytes(bytes: number) {

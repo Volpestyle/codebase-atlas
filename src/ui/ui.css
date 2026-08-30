@@ -162,6 +162,16 @@
   white-space: nowrap;
 }
 
+/* Detail line: what crosses an import edge, under the partner's name. */
+.register span em {
+  display: block;
+  overflow: hidden;
+  color: var(--olive);
+  font-size: var(--fs-nano);
+  font-style: normal;
+  text-overflow: ellipsis;
+}
+
 .register b {
   font-weight: 500;
   font-variant-numeric: tabular-nums;
@@ -197,6 +207,21 @@
 .kind-asset {
   border-style: dotted;
   background: var(--kind-asset);
+}
+
+/* Symbol kinds: a declaration is a behavior, a shape, or a value. */
+.kind-function {
+  background: var(--kind-function);
+}
+
+.kind-type {
+  border-radius: 50%;
+  background: var(--kind-type);
+}
+
+.kind-constant {
+  border-style: dotted;
+  background: var(--kind-constant);
 }
 
 .chip-mark {

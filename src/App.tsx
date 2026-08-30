@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { PanelResizeHandle, usePanelLayout } from "./PanelResizeHandle";
@@ -11,14 +11,29 @@ import RepositoryScene, { type RepositorySceneHandle } from "./RepositoryScene";
 import FlowScene from "./FlowScene";
 import { scanGitHubRepository } from "./github";
 import {
+  connectPairing,
+  fetchCompanionCatalog,
+  isPairingUrl,
+  parseCompanionOrigin,
+  parsePairingUrl,
+  pairingUrlFromStatus,
+  scanCompanionRepository,
+  type CompanionCatalog,
+  type CompanionStatus,
+} from "./companion";
+import PairingScanner from "./PairingScanner";
+import { pairingQrSvg } from "./pairingQr";
+import {
   DEFAULT_INSPECTOR_WIDTH,
   DEFAULT_RAIL_WIDTH,
   MIN_INSPECTOR_WIDTH,
   MIN_RAIL_WIDTH,
 } from "./panelLayout";
 import {
+  crossingLabel,
   formatBytes,
   layerForNode,
+  matchesSymbol,
   parseRepositoryGraph,
   type LayerName,
   type LayerVisibility,
@@ -40,9 +55,11 @@ import {
 import "./App.css";
 
 const LAST_SOURCE_KEY = "codebase-atlas:last-source";
+const LAST_COMPANION_KEY = "codebase-atlas:companion";
 const isTauriRuntime = "__TAURI_INTERNALS__" in window;
-// Folder pickers and save dialogs exist on desktop only; touch devices load
-// exported map files or GitHub URLs instead.
+// Folder pickers and the Share host run on desktop Tauri. iPad and the
+// browser load GitHub URLs, exported maps, or a live companion over the
+// LAN / Tailscale.
 const isDesktopRuntime = isTauriRuntime && navigator.maxTouchPoints < 2;
 
 // Granularity slider range; the top stop renders every depth.
@@ -51,7 +68,10 @@ const DEFAULT_MAP_DEPTH = 2;
 
 type SavedSource =
   | { kind: "local"; value: string }
-  | { kind: "github"; value: string };
+  | { kind: "github"; value: string }
+  | { kind: "companion"; host: string; token: string; path: string };
+
+type SavedCompanion = { host: string; token: string };
 
 const kindDescriptions: Record<RepositoryNodeKind, string> = {
   repository: "The repository root and coordinate origin for this code map.",
@@ -73,30 +93,48 @@ const defaultLayers: LayerVisibility = {
   imports: true,
 };
 
+// One import partner: how many edges reach it, and the named bindings that
+// cross them — what the selection actually takes from that module.
+interface PartnerFlow {
+  count: number;
+  symbols: Set<string>;
+}
+
 // Import partners of the selected node, including everything beneath it, so a
 // directory shows the aggregate flow of its subtree.
 function flowPartners(graph: RepositoryGraph, selected: RepositoryNode) {
-  const imports = new Map<string, number>();
-  const importers = new Map<string, number>();
+  const imports = new Map<string, PartnerFlow>();
+  const importers = new Map<string, PartnerFlow>();
   if (selected.id === ".") return { imports, importers };
   const prefix = `${selected.id}/`;
   const inScope = (id: string) => id === selected.id || id.startsWith(prefix);
+  const record = (partners: Map<string, PartnerFlow>, id: string, symbols?: string[]) => {
+    let flow = partners.get(id);
+    if (!flow) {
+      flow = { count: 0, symbols: new Set() };
+      partners.set(id, flow);
+    }
+    flow.count += 1;
+    for (const symbol of symbols ?? []) flow.symbols.add(symbol);
+  };
   for (const edge of graph.edges) {
     if (edge.kind !== "imports") continue;
     const fromSelection = inScope(edge.source);
     const intoSelection = inScope(edge.target);
     if (fromSelection && !intoSelection) {
-      imports.set(edge.target, (imports.get(edge.target) ?? 0) + 1);
+      record(imports, edge.target, edge.symbols);
     } else if (intoSelection && !fromSelection) {
-      importers.set(edge.source, (importers.get(edge.source) ?? 0) + 1);
+      record(importers, edge.source, edge.symbols);
     }
   }
   return { imports, importers };
 }
 
-function topFlows(flows: Map<string, number>) {
+function topFlows(flows: Map<string, PartnerFlow>) {
   return [...flows]
-    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .sort(
+      (left, right) => right[1].count - left[1].count || left[0].localeCompare(right[0]),
+    )
     .slice(0, 6);
 }
 
@@ -232,15 +270,24 @@ function errorMessage(error: unknown) {
 function readSavedSource(): SavedSource | null {
   try {
     const saved: unknown = JSON.parse(localStorage.getItem(LAST_SOURCE_KEY) ?? "null");
+    if (!saved || typeof saved !== "object" || !("kind" in saved)) return null;
     if (
-      saved &&
-      typeof saved === "object" &&
-      "kind" in saved &&
-      "value" in saved &&
       (saved.kind === "local" || saved.kind === "github") &&
+      "value" in saved &&
       typeof saved.value === "string"
     ) {
       return { kind: saved.kind, value: saved.value };
+    }
+    if (
+      saved.kind === "companion" &&
+      "host" in saved &&
+      "token" in saved &&
+      "path" in saved &&
+      typeof saved.host === "string" &&
+      typeof saved.token === "string" &&
+      typeof saved.path === "string"
+    ) {
+      return { kind: "companion", host: saved.host, token: saved.token, path: saved.path };
     }
   } catch {
     localStorage.removeItem(LAST_SOURCE_KEY);
@@ -250,6 +297,29 @@ function readSavedSource(): SavedSource | null {
 
 function saveSource(source: SavedSource) {
   localStorage.setItem(LAST_SOURCE_KEY, JSON.stringify(source));
+}
+
+function readSavedCompanion(): SavedCompanion | null {
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(LAST_COMPANION_KEY) ?? "null");
+    if (
+      saved &&
+      typeof saved === "object" &&
+      "host" in saved &&
+      "token" in saved &&
+      typeof saved.host === "string" &&
+      typeof saved.token === "string"
+    ) {
+      return { host: saved.host, token: saved.token };
+    }
+  } catch {
+    localStorage.removeItem(LAST_COMPANION_KEY);
+  }
+  return null;
+}
+
+function saveCompanionConnection(host: string, token: string) {
+  localStorage.setItem(LAST_COMPANION_KEY, JSON.stringify({ host, token }));
 }
 
 function App() {
@@ -269,6 +339,13 @@ function App() {
   const [railOpen, setRailOpen] = useState(false);
   const [githubDialogOpen, setGitHubDialogOpen] = useState(false);
   const [githubUrl, setGitHubUrl] = useState("");
+  const [computerDialogOpen, setComputerDialogOpen] = useState(false);
+  const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const [companionHost, setCompanionHost] = useState("");
+  const [companionToken, setCompanionToken] = useState("");
+  const [companionCatalog, setCompanionCatalog] = useState<CompanionCatalog | null>(null);
+  const [shareStatus, setShareStatus] = useState<CompanionStatus | null>(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
   const {
     shellRef,
     workspaceRef,
@@ -285,8 +362,11 @@ function App() {
   const initialScanStarted = useRef(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const githubDialogRef = useRef<HTMLDialogElement>(null);
+  const computerDialogRef = useRef<HTMLDialogElement>(null);
+  const shareDialogRef = useRef<HTMLDialogElement>(null);
   const mapFileInputRef = useRef<HTMLInputElement>(null);
   const githubInputRef = useRef<HTMLInputElement>(null);
+  const companionHostRef = useRef<HTMLInputElement>(null);
   const sceneRef = useRef<RepositorySceneHandle>(null);
 
   function showGraph(nextGraph: RepositoryGraph) {
@@ -314,6 +394,129 @@ function App() {
       if (isTauriRuntime) setError(errorMessage(scanError));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function connectCompanion(host: string, token: string) {
+    const origin = parseCompanionOrigin(host);
+    const catalog = await fetchCompanionCatalog(origin, token);
+    setCompanionHost(host);
+    setCompanionToken(token);
+    setCompanionCatalog(catalog);
+    saveCompanionConnection(host, token);
+    return { origin, catalog };
+  }
+
+  async function applyPairingText(text: string) {
+    setScannerOpen(false);
+    setComputerDialogOpen(true);
+    setLoading(true);
+    setError(null);
+    try {
+      const payload = parsePairingUrl(text);
+      setCompanionToken(payload.token);
+      const { origin, catalog } = await connectPairing(payload);
+      const host = origin.replace(/^https?:\/\//, "");
+      setCompanionHost(host);
+      setCompanionCatalog(catalog);
+      saveCompanionConnection(host, payload.token);
+      if (catalog.repositories.length === 1) {
+        await scanCompanion(host, payload.token, catalog.repositories[0].path);
+      }
+    } catch (pairError) {
+      setError(errorMessage(pairError));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function scanCompanion(host: string, token: string, path: string) {
+    setLoading(true);
+    setError(null);
+    try {
+      const origin = parseCompanionOrigin(host);
+      const nextGraph = await scanCompanionRepository(origin, token, path);
+      setCompanionHost(host);
+      setCompanionToken(token);
+      saveCompanionConnection(host, token);
+      showGraph(nextGraph);
+      saveSource({ kind: "companion", host, token, path });
+      setComputerDialogOpen(false);
+    } catch (scanError) {
+      setError(errorMessage(scanError));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function submitComputer(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (isPairingUrl(companionHost)) {
+      await applyPairingText(companionHost);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const { catalog } = await connectCompanion(companionHost, companionToken);
+      if (catalog.repositories.length === 1) {
+        await scanCompanion(companionHost, companionToken, catalog.repositories[0].path);
+        return;
+      }
+    } catch (scanError) {
+      setError(errorMessage(scanError));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function refreshShareStatus() {
+    if (!isDesktopRuntime) return null;
+    try {
+      const status = await invoke<CompanionStatus>("companion_status");
+      setShareStatus(status);
+      return status;
+    } catch (statusError) {
+      setError(errorMessage(statusError));
+      return null;
+    }
+  }
+
+  async function toggleSharing() {
+    if (!isDesktopRuntime) return;
+    setError(null);
+    try {
+      const status = shareStatus?.enabled
+        ? await invoke<CompanionStatus>("stop_companion")
+        : await invoke<CompanionStatus>("start_companion", {
+            extra_root: graph?.root ?? null,
+          });
+      setShareStatus(status);
+    } catch (shareError) {
+      setError(errorMessage(shareError));
+      await refreshShareStatus();
+    }
+  }
+
+  async function shareFolder() {
+    if (!isDesktopRuntime) return;
+    setError(null);
+    try {
+      const selected = await open({ directory: true, multiple: false });
+      const path = Array.isArray(selected) ? selected[0] : selected;
+      if (!path) return;
+      setShareStatus(await invoke<CompanionStatus>("share_companion_root", { path }));
+    } catch (dialogError) {
+      setError(errorMessage(dialogError));
+    }
+  }
+
+  async function unshareFolder(path: string) {
+    if (!isDesktopRuntime) return;
+    try {
+      setShareStatus(await invoke<CompanionStatus>("unshare_companion_root", { path }));
+    } catch (shareError) {
+      setError(errorMessage(shareError));
     }
   }
 
@@ -347,22 +550,69 @@ function App() {
   }
 
   useEffect(() => {
+    if (isDesktopRuntime) void refreshShareStatus();
+  }, []);
+
+  useEffect(() => {
+    if (!isTauriRuntime) return;
+    let unlisten: (() => void) | undefined;
+    void (async () => {
+      try {
+        const { onOpenUrl } = await import("@tauri-apps/plugin-deep-link");
+        unlisten = await onOpenUrl((urls) => {
+          const next = urls.find((url) => isPairingUrl(url));
+          if (next) void applyPairingText(next);
+        });
+      } catch {
+        // Deep links only exist in the native app.
+      }
+    })();
+    return () => unlisten?.();
+  }, []);
+
+  useEffect(() => {
     if (initialScanStarted.current) return;
     initialScanStarted.current = true;
+    const remembered = readSavedCompanion();
+    if (remembered) {
+      setCompanionHost(remembered.host);
+      setCompanionToken(remembered.token);
+    }
     void (async () => {
-      // Mobile builds exist to carry their bundled map; it wins at launch.
-      if (!isDesktopRuntime && (await loadBundledMap())) return;
+      if (isTauriRuntime) {
+        try {
+          const { getCurrent } = await import("@tauri-apps/plugin-deep-link");
+          const current = await getCurrent();
+          const pairing = current?.find((url) => isPairingUrl(url));
+          if (pairing) {
+            await applyPairingText(pairing);
+            return;
+          }
+        } catch {
+          // Continue with a saved source when deep links are unavailable.
+        }
+      }
       const savedSource = readSavedSource();
+      if (savedSource?.kind === "companion") {
+        setCompanionHost(savedSource.host);
+        setCompanionToken(savedSource.token);
+        await scanCompanion(savedSource.host, savedSource.token, savedSource.path);
+        return;
+      }
       if (savedSource?.kind === "github") {
         setGitHubUrl(savedSource.value);
         await scanGitHub(savedSource.value);
-      } else if (savedSource?.kind === "local" && isDesktopRuntime) {
-        await scanPath(savedSource.value);
-      } else if (isDesktopRuntime && import.meta.env.DEV) {
-        await scanPath("..");
-      } else {
-        await loadBundledMap();
+        return;
       }
+      if (savedSource?.kind === "local" && isDesktopRuntime) {
+        await scanPath(savedSource.value);
+        return;
+      }
+      if (isDesktopRuntime && import.meta.env.DEV) {
+        await scanPath("..");
+        return;
+      }
+      await loadBundledMap();
     })();
   }, []);
 
@@ -378,12 +628,38 @@ function App() {
   }, [githubDialogOpen]);
 
   useEffect(() => {
+    const dialog = computerDialogRef.current;
+    if (!dialog) return;
+    if (computerDialogOpen && !dialog.open) {
+      dialog.showModal();
+      companionHostRef.current?.focus();
+    } else if (!computerDialogOpen && dialog.open) {
+      dialog.close();
+    }
+  }, [computerDialogOpen]);
+
+  useEffect(() => {
+    const dialog = shareDialogRef.current;
+    if (!dialog) return;
+    if (shareDialogOpen && !dialog.open) dialog.showModal();
+    else if (!shareDialogOpen && dialog.open) dialog.close();
+  }, [shareDialogOpen]);
+
+  useEffect(() => {
     function handleKeyboard(event: globalThis.KeyboardEvent) {
       if (event.key === "Escape") {
         // Each press peels one layer: dialog, mobile rail, then the opened
         // district backs out to its closed slab.
         if (githubDialogOpen) {
           setGitHubDialogOpen(false);
+          return;
+        }
+        if (computerDialogOpen) {
+          setComputerDialogOpen(false);
+          return;
+        }
+        if (shareDialogOpen) {
+          setShareDialogOpen(false);
           return;
         }
         if (railOpen) {
@@ -409,6 +685,10 @@ function App() {
       if (event.key.toLowerCase() === "g") {
         event.preventDefault();
         openGitHubDialog();
+      } else if (event.key.toLowerCase() === "c") {
+        event.preventDefault();
+        if (isDesktopRuntime) openShareDialog();
+        else openComputerDialog();
       } else if (event.key === "/") {
         event.preventDefault();
         searchRef.current?.focus();
@@ -443,17 +723,30 @@ function App() {
   }
 
   async function exportMap() {
-    if (!graph || !isDesktopRuntime) return;
+    if (!graph) return;
     setError(null);
-    try {
-      const path = await save({
-        defaultPath: `${graph.name}.atlas.json`,
-        filters: [{ name: "Codebase Atlas map", extensions: ["json"] }],
-      });
-      if (path) await invoke("save_map", { path, contents: JSON.stringify(graph) });
-    } catch (saveError) {
-      setError(errorMessage(saveError));
+    if (isDesktopRuntime) {
+      try {
+        const path = await save({
+          defaultPath: `${graph.name}.atlas.json`,
+          filters: [{ name: "Codebase Atlas map", extensions: ["json"] }],
+        });
+        if (path) await invoke("save_map", { path, contents: JSON.stringify(graph) });
+      } catch (saveError) {
+        setError(errorMessage(saveError));
+      }
+      return;
     }
+    const url = URL.createObjectURL(
+      new Blob([JSON.stringify(graph)], { type: "application/json" }),
+    );
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${graph.name}.atlas.json`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
   }
 
   async function chooseRepository() {
@@ -473,14 +766,25 @@ function App() {
     setGitHubDialogOpen(true);
   }
 
+  function openComputerDialog() {
+    setError(null);
+    setComputerDialogOpen(true);
+  }
+
+  function openShareDialog() {
+    setError(null);
+    setShareDialogOpen(true);
+    void refreshShareStatus();
+  }
+
   function submitGitHub(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     void scanGitHub(githubUrl);
   }
 
   function selectNode(id: string | null) {
-    // Progressive disclosure: the first click on a module selects it — frames
-    // it and lights its connections at the current survey grain — and a
+    // Progressive disclosure: the first click on a module selects it and
+    // lights its connections at the current survey grain; a
     // second click on the same module breaks it open. Selecting anything
     // outside the opened district (an ancestor, a sibling, empty ground)
     // closes it again: one district decomposed at a time.
@@ -498,7 +802,7 @@ function App() {
 
   function closeOpened() {
     // Backing out lifts the selection to the district that just closed, so
-    // the inspector and camera land on the whole rather than a hidden child.
+    // the inspector lands on the whole rather than a hidden child.
     setSelectedId(openedId);
     setOpenedId(null);
   }
@@ -515,7 +819,8 @@ function App() {
         node.name.toLowerCase().includes(normalizedSearch) ||
         node.path.toLowerCase().includes(normalizedSearch) ||
         node.language?.toLowerCase().includes(normalizedSearch) ||
-        node.description?.toLowerCase().includes(normalizedSearch),
+        node.description?.toLowerCase().includes(normalizedSearch) ||
+        matchesSymbol(node, normalizedSearch),
     ) ?? [];
   const moduleGroups: { key: LayerName; label: string; nodes: RepositoryNode[] }[] = [
     {
@@ -554,6 +859,12 @@ function App() {
   const layerCount = Object.keys(layers).length;
   const importEdgeCount =
     graph?.edges.reduce((count, edge) => count + (edge.kind === "imports" ? 1 : 0), 0) ?? 0;
+  const sharePairingUrl =
+    shareStatus?.enabled && shareStatus.token ? pairingUrlFromStatus(shareStatus) : null;
+  const shareQrSvg = useMemo(
+    () => (sharePairingUrl ? pairingQrSvg(sharePairingUrl) : null),
+    [sharePairingUrl],
+  );
   const flows =
     graph && selectedNode && graph.stats.importsAvailable
       ? flowPartners(graph, selectedNode)
@@ -621,6 +932,259 @@ function App() {
           </footer>
         </form>
       </dialog>
+
+      <dialog
+        ref={computerDialogRef}
+        className="source-dialog"
+        aria-labelledby="computer-dialog-title"
+        aria-describedby="computer-dialog-description"
+        onClose={() => setComputerDialogOpen(false)}
+        onCancel={() => setComputerDialogOpen(false)}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) setComputerDialogOpen(false);
+        }}
+      >
+        <form onSubmit={submitComputer}>
+          <SectionHeading
+            index="SOURCE / COMPUTER"
+            title="Map a computer’s repositories"
+            titleId="computer-dialog-title"
+            action={
+              <button
+                type="button"
+                onClick={() => setComputerDialogOpen(false)}
+                aria-label="Close computer dialog"
+              >
+                ×
+              </button>
+            }
+          />
+          <p id="computer-dialog-description">
+            Scan the QR code on the computer, or enter a host and pairing code. Same Wi-Fi or Tailscale;
+            the computer scans and this device never clones the repo.
+          </p>
+          {!isDesktopRuntime ? (
+            <div className="pairing-scan-action">
+              {isTauriRuntime ? (
+                <small>
+                  Open the Camera app and point it at the QR code on the computer. iOS will offer to
+                  open Codebase Atlas already paired.
+                </small>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="btn-ink"
+                    onClick={() => {
+                      setError(null);
+                      setScannerOpen(true);
+                    }}
+                  >
+                    Scan pairing code
+                  </button>
+                  <small>Or point the iOS Camera app at the computer’s QR code</small>
+                </>
+              )}
+            </div>
+          ) : null}
+          <label>
+            <span>Host</span>
+            <input
+              ref={companionHostRef}
+              type="text"
+              value={companionHost}
+              onChange={(event) => {
+                setCompanionHost(event.currentTarget.value);
+                setCompanionCatalog(null);
+              }}
+              placeholder="macbook.local or 100.x.x.x"
+              autoComplete="off"
+              spellCheck={false}
+              required
+            />
+          </label>
+          <label>
+            <span>Pairing code</span>
+            <input
+              type="text"
+              value={companionToken}
+              onChange={(event) => setCompanionToken(event.currentTarget.value)}
+              placeholder="K7M2-Q9XP"
+              autoComplete="off"
+              spellCheck={false}
+              required
+            />
+          </label>
+          {companionCatalog ? (
+            <div className="catalog-list">
+              <p>
+                {companionCatalog.repositories.length
+                  ? `${companionCatalog.name} · ${companionCatalog.repositories.length} shared`
+                  : `${companionCatalog.name} is sharing, but no folders are listed yet. Add a folder on the computer.`}
+              </p>
+              <ul>
+                {companionCatalog.repositories.map((repository) => (
+                  <li key={repository.path}>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void scanCompanion(companionHost, companionToken, repository.path)
+                      }
+                      disabled={loading}
+                    >
+                      <span>{repository.name}</span>
+                      <small>{repository.path}</small>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {error ? (
+            <p className="source-dialog-error" role="alert">
+              {error}
+            </p>
+          ) : null}
+          <footer>
+            <small>Needs the desktop app’s Share toggle, or `serve` on that machine</small>
+            <button type="submit" className="btn-ink" disabled={loading}>
+              {loading ? "Connecting" : companionCatalog ? "Refresh list" : "Connect"}
+            </button>
+          </footer>
+        </form>
+      </dialog>
+
+      <dialog
+        ref={shareDialogRef}
+        className="source-dialog"
+        aria-labelledby="share-dialog-title"
+        aria-describedby="share-dialog-description"
+        onClose={() => setShareDialogOpen(false)}
+        onCancel={() => setShareDialogOpen(false)}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) setShareDialogOpen(false);
+        }}
+      >
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void toggleSharing();
+          }}
+        >
+          <SectionHeading
+            index="SOURCE / SHARE"
+            title="Share with devices"
+            titleId="share-dialog-title"
+            action={
+              <button
+                type="button"
+                onClick={() => setShareDialogOpen(false)}
+                aria-label="Close share dialog"
+              >
+                ×
+              </button>
+            }
+          />
+          <p id="share-dialog-description">
+            iPhone and iPad scan this QR code to pair — Camera app or Scan inside Codebase Atlas.
+            They receive the graph, not source files.
+          </p>
+          {shareStatus?.enabled ? (
+            <>
+              {shareQrSvg && sharePairingUrl ? (
+                <div className="pairing-qr-block">
+                  <div
+                    className="pairing-qr"
+                    aria-hidden="true"
+                    dangerouslySetInnerHTML={{ __html: shareQrSvg }}
+                  />
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    onClick={() => void navigator.clipboard.writeText(sharePairingUrl)}
+                  >
+                    Copy pairing link
+                  </button>
+                </div>
+              ) : null}
+              <div className="pairing-block">
+                <span>Pairing code</span>
+                <strong className="pairing-code">{shareStatus.token}</strong>
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  onClick={() => void navigator.clipboard.writeText(shareStatus.token)}
+                >
+                  Copy
+                </button>
+              </div>
+              <ul className="address-list">
+                {shareStatus.addresses.map((address) => (
+                    <li key={address.url}>
+                      <button
+                        type="button"
+                        onClick={() => void navigator.clipboard.writeText(address.url)}
+                        title="Copy address"
+                      >
+                        <span>{address.label}</span>
+                        <small>{address.url.replace(/^https?:\/\//, "")}</small>
+                      </button>
+                    </li>
+                  ))}
+              </ul>
+              <div className="catalog-list">
+                <p>
+                  {shareStatus.roots.length
+                    ? "Shared folders"
+                    : "Scan a directory or add a folder — that is what devices will see."}
+                </p>
+                <ul>
+                  {shareStatus.roots.map((root) => (
+                    <li key={root.path}>
+                      <span className="shared-root">
+                        <b>{root.name}</b>
+                        <small>{root.path}</small>
+                      </span>
+                      <button type="button" className="btn-ghost" onClick={() => void unshareFolder(root.path)}>
+                        Remove
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                <button type="button" className="btn-ghost share-add" onClick={() => void shareFolder()}>
+                  Share folder
+                </button>
+              </div>
+            </>
+          ) : null}
+          {error ? (
+            <p className="source-dialog-error" role="alert">
+              {error}
+            </p>
+          ) : null}
+          {shareStatus?.error ? (
+            <p className="source-dialog-error" role="alert">
+              {shareStatus.error}
+            </p>
+          ) : null}
+          <footer>
+            <small>
+              {shareStatus?.enabled
+                ? "On iPhone, open Camera and scan this code — or Scan inside the app"
+                : "Starts a local HTTP companion on port 7420"}
+            </small>
+            <button type="submit" className="btn-ink">
+              {shareStatus?.enabled ? "Stop sharing" : "Start sharing"}
+            </button>
+          </footer>
+        </form>
+      </dialog>
+
+      <PairingScanner
+        open={scannerOpen}
+        onClose={() => setScannerOpen(false)}
+        onDetect={(text) => void applyPairingText(text)}
+      />
 
       <header className="instrument-bar">
         <div className="brand-block" aria-label="Codebase Atlas">
@@ -702,18 +1266,16 @@ function App() {
             <span aria-hidden="true">[ ⇣ ]</span>
             <b>Open map</b>
           </button>
-          {isDesktopRuntime ? (
-            <button
-              className="github-button"
-              type="button"
-              onClick={() => void exportMap()}
-              disabled={loading || !graph}
-              aria-label="Save the current map to a file"
-            >
-              <span aria-hidden="true">[ ⇡ ]</span>
-              <b>Save map</b>
-            </button>
-          ) : null}
+          <button
+            className="github-button"
+            type="button"
+            onClick={() => void exportMap()}
+            disabled={loading || !graph}
+            aria-label="Save the current map to a file"
+          >
+            <span aria-hidden="true">[ ⇡ ]</span>
+            <b>Save map</b>
+          </button>
           <button
             className="github-button"
             type="button"
@@ -725,14 +1287,38 @@ function App() {
             <span aria-hidden="true">[ GH ]</span>
             <b>GitHub URL</b>
           </button>
-          {isDesktopRuntime || !isTauriRuntime ? (
+          {isDesktopRuntime ? (
+            <button
+              className="github-button"
+              type="button"
+              onClick={openShareDialog}
+              disabled={loading}
+              aria-label="Share local repositories with devices on this network"
+              aria-keyshortcuts="c"
+            >
+              <span aria-hidden="true">[ NET ]</span>
+              <b>{shareStatus?.enabled ? "Sharing" : "Share"}</b>
+            </button>
+          ) : (
+            <button
+              className="github-button"
+              type="button"
+              onClick={openComputerDialog}
+              disabled={loading}
+              aria-label="Connect to a computer on this network or Tailscale"
+              aria-keyshortcuts="c"
+            >
+              <span aria-hidden="true">[ NET ]</span>
+              <b>Computer</b>
+            </button>
+          )}
+          {isDesktopRuntime ? (
             <button
               className="scan-button"
               type="button"
               onClick={() => void chooseRepository()}
-              disabled={loading || !isDesktopRuntime}
+              disabled={loading}
               aria-label="Choose a repository directory to scan"
-              title={isDesktopRuntime ? undefined : "Local directory scanning is available in the desktop app"}
             >
               <span aria-hidden="true">[ + ]</span>
               <b>{loading ? "Scanning" : "Scan directory"}</b>
@@ -1022,7 +1608,9 @@ function App() {
               <span className="section-index">Awaiting coordinates</span>
               <h2 id="empty-title">Map a codebase</h2>
               <p>
-                Select a local directory or enter a public GitHub URL to inspect its structure, languages, and modules.
+                {isDesktopRuntime
+                  ? "Select a local directory, share with devices on this network, or enter a public GitHub URL."
+                  : "Connect to your computer over Wi-Fi or Tailscale, open an exported map, or enter a public GitHub URL."}
               </p>
               <div className="empty-actions">
                 <button
@@ -1050,11 +1638,20 @@ function App() {
                   >
                     Local directory
                   </button>
-                ) : null}
+                ) : (
+                  <button
+                    className="btn-ghost"
+                    type="button"
+                    onClick={openComputerDialog}
+                    disabled={loading}
+                  >
+                    Computer
+                  </button>
+                )}
               </div>
               {!isDesktopRuntime ? (
                 <small>
-                  Local scanning happens in the desktop app — export a map there and open it here.
+                  On the computer, start Share — then scan the QR code here.
                 </small>
               ) : null}
             </section>
@@ -1068,7 +1665,7 @@ function App() {
             </div>
           ) : null}
 
-          {error && !githubDialogOpen ? (
+          {error && !githubDialogOpen && !computerDialogOpen && !shareDialogOpen ? (
             <div className="error-plate" role="alert">
               <div>
                 <strong>Scan interrupted</strong>
@@ -1201,6 +1798,20 @@ function App() {
                       />
                     </section>
                   ) : null}
+                  {selectedNode.symbols?.length ? (
+                    <section>
+                      <h4>Declares / {selectedNode.symbols.length}</h4>
+                      <Register
+                        items={selectedNode.symbols.map((symbol) => ({
+                          id: `${selectedNode.id}#${symbol.name}`,
+                          label: symbol.name,
+                          kind: symbol.kind,
+                          title: `${symbol.exported ? "Exported" : "Internal"} ${symbol.kind} at line ${symbol.line}`,
+                          value: symbol.line,
+                        }))}
+                      />
+                    </section>
+                  ) : null}
                   {flows
                     ? [
                         {
@@ -1221,11 +1832,12 @@ function App() {
                             </h4>
                             <Register
                               onSelect={selectNode}
-                              items={group.entries.map(([id, count]) => ({
+                              items={group.entries.map(([id, flow]) => ({
                                 id,
                                 label: id.split("/").pop() ?? id,
                                 title: id,
-                                value: count,
+                                value: flow.count,
+                                detail: crossingLabel(flow.symbols),
                               }))}
                             />
                           </section>

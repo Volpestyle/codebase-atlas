@@ -7,10 +7,12 @@ use std::{
 use ignore::{DirEntry, WalkBuilder};
 use serde::Serialize;
 
-use crate::imports::{self, ImportLanguage, ImportResolver};
+use crate::imports::{self, ImportResolver};
+use crate::symbols::{self, ImportLanguage, ImportRef, Symbol};
 
 const MAX_NODES: usize = 4_000;
 const MAX_IMPORT_EDGES: usize = 20_000;
+const MAX_SYMBOLS: usize = 60_000;
 const MAX_TEXT_BYTES: u64 = 2 * 1024 * 1024;
 const GENERATED_DIRECTORIES: &[&str] = &[
     ".git",
@@ -29,7 +31,7 @@ const GENERATED_DIRECTORIES: &[&str] = &[
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct RepositoryGraph {
+pub struct RepositoryGraph {
     root: String,
     name: String,
     branch: Option<String>,
@@ -60,6 +62,10 @@ pub(crate) struct RepositoryNode {
     depth: usize,
     child_count: usize,
     description: Option<String>,
+    /// Declarations this file makes. Empty for directories and for languages
+    /// the extractor does not read.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    symbols: Vec<Symbol>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -79,6 +85,11 @@ pub(crate) struct RepositoryEdge {
     source: String,
     target: String,
     kind: EdgeKind,
+    /// For an import edge, the named bindings that cross it — what the source
+    /// actually takes from the target. Empty for containment, for side-effect
+    /// and dynamic imports, and `*` for namespace and glob imports.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    symbols: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -115,7 +126,7 @@ struct ScanState {
     relationships: Vec<(usize, usize)>,
     node_indexes: HashMap<String, usize>,
     language_totals: BTreeMap<&'static str, (usize, u64)>,
-    pending_imports: Vec<(String, ImportLanguage, Vec<String>)>,
+    pending_imports: Vec<(String, ImportLanguage, Vec<ImportRef>)>,
     npm_packages: BTreeMap<String, String>,
     cargo_crates: BTreeMap<String, String>,
     warnings: Vec<String>,
@@ -132,14 +143,12 @@ pub(crate) fn save_map(path: String, contents: String) -> Result<(), String> {
     fs::write(path, contents).map_err(|error| format!("Could not save the map file: {error}"))
 }
 
-#[tauri::command]
-pub(crate) async fn scan_repository(path: String) -> Result<RepositoryGraph, String> {
-    tauri::async_runtime::spawn_blocking(move || scan_repository_path(Path::new(&path)))
-        .await
-        .map_err(|_| "Repository scan stopped unexpectedly.".to_owned())?
-}
-
-pub(crate) fn scan_repository_path(path: &Path) -> Result<RepositoryGraph, String> {
+/// Walks `path` into a serializable repository graph.
+///
+/// # Errors
+///
+/// Returns a user-facing message when the folder is missing, unreadable, or not a directory.
+pub fn scan_repository_path(path: &Path) -> Result<RepositoryGraph, String> {
     let root = canonical_root(path)?;
     let root_name = root.file_name().map_or_else(
         || root.to_string_lossy().into_owned(),
@@ -191,6 +200,7 @@ impl ScanState {
                 depth: 0,
                 child_count: 0,
                 description: None,
+                symbols: Vec::new(),
             }],
             edges: Vec::new(),
             relationships: Vec::new(),
@@ -256,9 +266,9 @@ impl ScanState {
             .path()
             .extension()
             .map(|extension| extension.to_string_lossy().to_ascii_lowercase());
-        if let Some(text) = &text {
-            self.register_file_text(&id, &parent_id, &name, extension.as_deref(), text);
-        }
+        let symbols = text.as_deref().map_or_else(Vec::new, |text| {
+            self.register_file_text(&id, &parent_id, &name, extension.as_deref(), text)
+        });
 
         self.nodes[parent_index].child_count += 1;
         self.nodes.push(RepositoryNode {
@@ -273,11 +283,13 @@ impl ScanState {
             depth: entry.depth(),
             child_count: 0,
             description: None,
+            symbols,
         });
         self.edges.push(RepositoryEdge {
             source: parent_id,
             target: id.clone(),
             kind: EdgeKind::Contains,
+            symbols: Vec::new(),
         });
         self.relationships.push((parent_index, node_index));
         self.node_indexes.insert(id, node_index);
@@ -297,6 +309,9 @@ impl ScanState {
         true
     }
 
+    /// Parses a source file into the fact layer, returning the declarations to
+    /// attach to its node. Manifests instead register the workspace names that
+    /// import resolution needs.
     fn register_file_text(
         &mut self,
         id: &str,
@@ -304,13 +319,14 @@ impl ScanState {
         name: &str,
         extension: Option<&str>,
         text: &str,
-    ) {
-        if let Some(language) = imports::import_language(extension) {
-            let specifiers = imports::extract_specifiers(language, text);
-            if !specifiers.is_empty() {
-                self.pending_imports.push((id.to_owned(), language, specifiers));
+    ) -> Vec<Symbol> {
+        if let Some(language) = symbols::import_language(extension) {
+            let facts = symbols::extract(language, extension, text);
+            if !facts.imports.is_empty() {
+                self.pending_imports
+                    .push((id.to_owned(), language, facts.imports));
             }
-            return;
+            return facts.symbols;
         }
         let directory = if parent_id == "." {
             String::new()
@@ -326,6 +342,7 @@ impl ScanState {
                 self.cargo_crates.insert(package.replace('-', "_"), directory);
             }
         }
+        Vec::new()
     }
 
     fn resolve_imports(&mut self) -> Vec<RepositoryEdge> {
@@ -340,11 +357,22 @@ impl ScanState {
             })
             .collect();
         let resolver = ImportResolver::new(&node_kinds, &self.npm_packages, &self.cargo_crates);
-        let mut pairs = BTreeSet::new();
-        for (source, language, specifiers) in &self.pending_imports {
-            for specifier in specifiers {
-                if let Some(target) = resolver.resolve(*language, source, specifier) {
-                    pairs.insert((source.clone(), target));
+        // Several import sites can reach the same file; their bindings merge so
+        // one edge carries everything that crosses it.
+        let mut pairs: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
+        for (source, language, references) in &self.pending_imports {
+            for reference in references {
+                if let Some(target) = resolver.resolve(*language, source, &reference.specifier) {
+                    // A binding named after the module it comes from (`use
+                    // crate::scanner;`) repeats the edge's own target.
+                    let module_name = module_name(&target);
+                    let names: Vec<String> = reference
+                        .names
+                        .iter()
+                        .filter(|name| name.as_str() != module_name)
+                        .cloned()
+                        .collect();
+                    pairs.entry((source.clone(), target)).or_default().extend(names);
                 }
             }
         }
@@ -355,12 +383,31 @@ impl ScanState {
         pairs
             .into_iter()
             .take(MAX_IMPORT_EDGES)
-            .map(|(source, target)| RepositoryEdge {
+            .map(|((source, target), names)| RepositoryEdge {
                 source,
                 target,
                 kind: EdgeKind::Imports,
+                symbols: names.into_iter().collect(),
             })
             .collect()
+    }
+
+    /// Keeps the exported graph — which also travels to paired devices — from
+    /// growing without bound on repositories that declare enormous surfaces.
+    fn cap_symbols(&mut self) {
+        let mut budget = MAX_SYMBOLS;
+        let mut dropped = false;
+        for node in &mut self.nodes {
+            if node.symbols.len() > budget {
+                node.symbols.truncate(budget);
+                dropped = true;
+            }
+            budget -= node.symbols.len();
+        }
+        if dropped {
+            self.warnings
+                .push(format!("Symbols limited to {MAX_SYMBOLS}."));
+        }
     }
 
     fn finish(mut self, root: &Path) -> RepositoryGraph {
@@ -374,6 +421,7 @@ impl ScanState {
 
         let import_edges = self.resolve_imports();
         self.edges.extend(import_edges);
+        self.cap_symbols();
         attach_index_summaries(root, &mut self.nodes, &mut self.warnings);
         self.nodes.sort_by(|left, right| left.id.cmp(&right.id));
         self.edges.sort_by(|left, right| {
@@ -426,7 +474,7 @@ impl ScanState {
     }
 }
 
-fn canonical_root(path: &Path) -> Result<PathBuf, String> {
+pub(crate) fn canonical_root(path: &Path) -> Result<PathBuf, String> {
     if path.as_os_str().is_empty() {
         return Err("Select a repository folder.".to_owned());
     }
@@ -449,6 +497,13 @@ fn should_visit(entry: &DirEntry) -> bool {
         || !GENERATED_DIRECTORIES
             .iter()
             .any(|directory| entry.file_name() == *directory)
+}
+
+/// File stem of a node id, which is the name an importer would use for the
+/// module itself.
+fn module_name(id: &str) -> &str {
+    let name = id.rsplit('/').next().unwrap_or(id);
+    name.rsplit_once('.').map_or(name, |(stem, _)| stem)
 }
 
 fn relative_path(path: &Path) -> String {

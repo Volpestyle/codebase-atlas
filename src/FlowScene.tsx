@@ -159,6 +159,7 @@ function MiniMap({ graph, node, searchQuery, depth, onSelect }: MiniMapProps) {
           searchQuery={searchQuery}
           layers={MINI_LAYERS}
           maxDepth={depth}
+          zoomToSelection
           animateCamera={false}
           onSelect={(id) => {
             if (id) onSelect(id);

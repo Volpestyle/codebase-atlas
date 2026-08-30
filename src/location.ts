@@ -1,7 +1,8 @@
 import type { RepositoryGraph, RepositoryNode } from "./model";
 
-// Cartographic grain of the current focus. Function is the next rung the
-// survey does not yet read, so the ladder can name it without lying.
+// Cartographic grain of the current focus. Function is the next rung: the
+// scanner reads declarations into the index, so search and the inspector work
+// at that grain, but the survey does not draw them as places yet.
 export type NodeScale = "field" | "district" | "folder" | "file";
 
 export interface ScaleRung {

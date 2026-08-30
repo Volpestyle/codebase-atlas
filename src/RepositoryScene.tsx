@@ -56,7 +56,9 @@ interface RepositorySceneProps {
   layers: LayerVisibility;
   maxDepth: number;
   onSelect: (id: string | null) => void;
-  /** The flow inset snaps to the selection; the main map eases there. */
+  /** The flow inset fits its contents; the main map preserves the user's zoom. */
+  zoomToSelection?: boolean;
+  /** Auto-framing snaps instead of easing when motion would be distracting. */
   animateCamera?: boolean;
 }
 
@@ -107,7 +109,7 @@ interface SceneEngine {
   hoveredFlowIndex: number | null;
   render: () => void;
   updateVisuals: () => void;
-  frameSelection: (id: string | null) => void;
+  frameSelection: (id: string | null, zoomToFit?: boolean) => void;
 }
 
 function createLabel(palette: MapPalette, text: string, kind: "district" | "file" = "district") {
@@ -398,7 +400,17 @@ function createModuleVisual(
 
 const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
   function RepositoryScene(
-    { graph, selectedId, openedId = null, searchQuery, layers, maxDepth, onSelect, animateCamera = true },
+    {
+      graph,
+      selectedId,
+      openedId = null,
+      searchQuery,
+      layers,
+      maxDepth,
+      onSelect,
+      zoomToSelection = false,
+      animateCamera = true,
+    },
     ref,
   ) {
     const mountRef = useRef<HTMLDivElement>(null);
@@ -714,12 +726,13 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
         };
       }
 
-      function frameSelection(id: string | null) {
+      function frameSelection(id: string | null, zoomToFit = true) {
         const pose = framingPose(id);
         const fromTarget = controls.target.clone();
         const fromZoom = camera.zoom;
-        if (poseAlreadyFramed(fromTarget, fromZoom, pose.target, pose.zoom)) {
-          applyPose(pose.target, pose.zoom);
+        const toZoom = zoomToFit ? pose.zoom : fromZoom;
+        if (poseAlreadyFramed(fromTarget, fromZoom, pose.target, toZoom)) {
+          applyPose(pose.target, toZoom);
           return;
         }
         cancelFly();
@@ -727,7 +740,7 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
           !animateCameraRef.current ||
           window.matchMedia("(prefers-reduced-motion: reduce)").matches;
         if (reduced) {
-          applyPose(pose.target, pose.zoom);
+          applyPose(pose.target, toZoom);
           return;
         }
         const fromPos = camera.position.clone();
@@ -738,7 +751,7 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
           const ease = 1 - (1 - t) ** 3;
           controls.target.lerpVectors(fromTarget, pose.target, ease);
           camera.position.lerpVectors(fromPos, toPos, ease);
-          camera.zoom = fromZoom + (pose.zoom - fromZoom) * ease;
+          camera.zoom = fromZoom + (toZoom - fromZoom) * ease;
           camera.updateProjectionMatrix();
           controls.update();
           render();
@@ -759,10 +772,7 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
         if (Math.hypot(event.clientX - pointerDown.x, event.clientY - pointerDown.y) > 5) return;
         const hit = pointFromEvent(event);
         const nextId = hit?.object.userData.nodeId ?? null;
-        if (nextId) {
-          engine.frameSelection(nextId);
-          onSelectRef.current(nextId);
-        }
+        if (nextId) onSelectRef.current(nextId);
       }
 
       function handlePointerLeave() {
@@ -885,8 +895,8 @@ const RepositoryScene = forwardRef<RepositorySceneHandle, RepositorySceneProps>(
     useEffect(() => {
       selectedIdRef.current = selectedId;
       syncVisualsRef.current?.();
-      engineRef.current?.frameSelection(selectedId);
-    }, [selectedId]);
+      engineRef.current?.frameSelection(selectedId, zoomToSelection);
+    }, [selectedId, zoomToSelection]);
 
     const hoverReadout = hoveredNode ? sceneReadout(hoveredNode) : null;
 

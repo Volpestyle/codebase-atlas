@@ -41,6 +41,9 @@
   --kind-config: #827a4d;
   --kind-documentation: #c0b77c;
   --kind-asset: #9c9462;
+  --kind-function: #b1a76d;
+  --kind-type: #c0b77c;
+  --kind-constant: #827a4d;
 
   /* Map (3D) palette — lit-scene variants of the kind palette plus scene
      furniture. Consumed by RepositoryScene via ui/theme.ts. */

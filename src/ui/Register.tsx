@@ -1,13 +1,15 @@
 import type { ReactNode } from "react";
-import type { RepositoryNodeKind } from "../model";
+import type { RepositoryNodeKind, SymbolKind } from "../model";
 import KindMark from "./KindMark";
 
 export interface RegisterItem {
   id: string;
   label: string;
   value: ReactNode;
-  kind?: RepositoryNodeKind;
+  kind?: RepositoryNodeKind | SymbolKind;
   title?: string;
+  /** Secondary line under the label — the symbols crossing an import edge. */
+  detail?: ReactNode;
 }
 
 /** Numbered name/value list: contains, import partners, language register.
@@ -25,7 +27,10 @@ function Register({
         const content = (
           <>
             {item.kind ? <KindMark kind={item.kind} /> : null}
-            <span>{item.label}</span>
+            <span>
+              {item.label}
+              {item.detail ? <em>{item.detail}</em> : null}
+            </span>
             <b>{item.value}</b>
           </>
         );

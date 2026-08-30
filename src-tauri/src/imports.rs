@@ -1,90 +1,14 @@
-//! Lightweight import extraction and resolution for scanned repositories.
+//! Resolution of extracted import specifiers against the scanned node set.
 //!
-//! Extraction is line-based and heuristic: it reads `import`/`require` forms in
-//! TypeScript and JavaScript and `use` declarations in Rust, then resolves each
-//! specifier against the scanned node set. Specifiers that do not resolve to a
-//! scanned file or directory (external packages, standard libraries, false
-//! positives inside strings) are dropped rather than guessed at.
+//! Specifiers arrive from [`crate::symbols`], which parses them out of source
+//! files. Resolution is deliberately not a compiler: relative paths, workspace
+//! `package.json` names, and workspace crate names are followed, and anything
+//! that does not land on a scanned file or directory (external packages,
+//! standard libraries) is dropped rather than guessed at.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ImportLanguage {
-    TsJs,
-    Rust,
-}
-
-pub(crate) fn import_language(extension: Option<&str>) -> Option<ImportLanguage> {
-    match extension {
-        Some("ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs") => Some(ImportLanguage::TsJs),
-        Some("rs") => Some(ImportLanguage::Rust),
-        _ => None,
-    }
-}
-
-pub(crate) fn extract_specifiers(language: ImportLanguage, text: &str) -> Vec<String> {
-    let mut specifiers = BTreeSet::new();
-    match language {
-        ImportLanguage::TsJs => ts_specifiers(text, &mut specifiers),
-        ImportLanguage::Rust => rust_specifiers(text, &mut specifiers),
-    }
-    specifiers.into_iter().collect()
-}
-
-fn ts_specifiers(text: &str, out: &mut BTreeSet<String>) {
-    for raw in text.lines() {
-        let line = raw.trim_start();
-        if line.starts_with("//") || line.starts_with('*') || line.starts_with("/*") {
-            continue;
-        }
-        if let Some(position) = line.rfind(" from ") {
-            push_quoted(&line[position + 6..], out);
-        } else if let Some(rest) = line.strip_prefix("import ") {
-            push_quoted(rest, out);
-        }
-        for pattern in ["require(", "import("] {
-            for (position, _) in line.match_indices(pattern) {
-                push_quoted(&line[position + pattern.len()..], out);
-            }
-        }
-    }
-}
-
-fn push_quoted(text: &str, out: &mut BTreeSet<String>) {
-    let text = text.trim_start();
-    let Some(quote) = text.chars().next().filter(|c| *c == '"' || *c == '\'') else {
-        return;
-    };
-    let body = &text[1..];
-    let Some(end) = body.find(quote) else { return };
-    let specifier = &body[..end];
-    if !specifier.is_empty() && !specifier.contains(char::is_whitespace) {
-        out.insert(specifier.to_owned());
-    }
-}
-
-fn rust_specifiers(text: &str, out: &mut BTreeSet<String>) {
-    for raw in text.lines() {
-        let line = raw.trim_start();
-        let rest = if let Some(rest) = line.strip_prefix("use ") {
-            rest
-        } else if line.starts_with("pub") {
-            let Some(position) = line.find(" use ") else {
-                continue;
-            };
-            &line[position + 5..]
-        } else {
-            continue;
-        };
-        let end = rest
-            .find(|c: char| !(c.is_alphanumeric() || c == ':' || c == '_'))
-            .unwrap_or(rest.len());
-        let base = rest[..end].trim_end_matches(':');
-        if !base.is_empty() {
-            out.insert(base.to_owned());
-        }
-    }
-}
+use crate::symbols::ImportLanguage;
 
 /// Resolves extracted specifiers against the scanned node set.
 pub(crate) struct ImportResolver<'a> {
@@ -356,21 +280,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extracts_ts_and_rust_specifiers() {
-        let ts = "import a from \"./a\";\nimport { b } from '../lib/b.js'\nexport * from \"@app/core\";\nconst c = require('./c')\nawait import(\"./d\")\n// import x from \"./ignored\"\nimport \"./effects\";\n";
-        assert_eq!(
-            extract_specifiers(ImportLanguage::TsJs, ts),
-            ["../lib/b.js", "./a", "./c", "./d", "./effects", "@app/core"]
-        );
-
-        let rust = "use crate::scanner::ScanState;\npub use super::imports::{a, b};\nuse std::fs;\nuse other_crate::Thing;\n";
-        assert_eq!(
-            extract_specifiers(ImportLanguage::Rust, rust),
-            ["crate::scanner::ScanState", "other_crate::Thing", "std::fs", "super::imports"]
-        );
-    }
-
-    #[test]
     fn resolves_specifiers_against_scanned_nodes() {
         let nodes = BTreeMap::from(
             [
@@ -380,6 +289,7 @@ mod tests {
                 ("app/src/util.ts", false),
                 ("app/src/widgets", true),
                 ("app/src/widgets/index.ts", false),
+                ("app/worker", true),
                 ("core", true),
                 ("core/src", true),
                 ("core/src/lib.rs", false),
@@ -404,6 +314,10 @@ mod tests {
         );
         assert_eq!(ts("app/src/main.ts", "@app/pkg"), Some("pkg/index.ts".to_owned()));
         assert_eq!(ts("app/src/main.ts", "react"), None);
+        assert_eq!(
+            ts("app/src/main.ts", "../worker"),
+            Some("app/worker".to_owned())
+        );
         assert_eq!(ts("app/src/util.ts", "./util"), None, "self-imports are dropped");
 
         let rust = |file: &str, spec: &str| resolver.resolve(ImportLanguage::Rust, file, spec);

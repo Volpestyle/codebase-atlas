@@ -40,5 +40,27 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>codebase-atlas</string>
+			</array>
+			<key>CFBundleURLName</key>
+			<string>codebase-atlas</string>
+		</dict>
+	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Codebase Atlas scans the pairing QR code shown on your computer.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Codebase Atlas connects to your Mac on this Wi-Fi or Tailscale network to map repositories that live there.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 </dict>
 </plist>
