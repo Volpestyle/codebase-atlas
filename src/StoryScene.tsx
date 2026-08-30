@@ -27,31 +27,37 @@ function shortPath(path: string) {
 function ActorCardShape({
   card,
   state,
+  pinned,
   onEnter,
   onLeave,
-  onPick,
+  onPin,
+  onOpen,
 }: {
   card: ActorCard;
   state: "on" | "off" | "rest";
+  pinned: boolean;
   onEnter: () => void;
   onLeave: () => void;
-  onPick: (module: string | null) => void;
+  onPin: () => void;
+  onOpen: (module: string) => void;
 }) {
   const { actor } = card;
-  const modulePath = actor.modules?.[0] ?? null;
   return (
     <g
-      className={`story-card story-role-${actor.role} is-${state}`}
+      className={`story-card story-role-${actor.role} is-${state}${
+        pinned ? " is-pinned" : ""
+      }`}
       onPointerEnter={onEnter}
       onPointerLeave={onLeave}
-      onClick={() => onPick(modulePath)}
+      onClick={onPin}
       role="button"
       tabIndex={0}
+      aria-pressed={pinned}
       aria-label={`${actor.name}. ${actor.blurb}`}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          onPick(modulePath);
+          onPin();
         }
       }}
     >
@@ -76,14 +82,46 @@ function ActorCardShape({
           {line}
         </text>
       ))}
-      {card.modules.length > 0 ? (
-        <text
-          className="story-card-modules"
-          x={card.x + 14}
-          y={card.y + card.height - 10}
+      {card.moduleRows.map((row) => (
+        <g
+          key={row.path}
+          className="story-card-module"
+          role="button"
+          tabIndex={0}
+          aria-label={`Open ${row.path} on the map`}
+          onClick={(event) => {
+            // The card traces the actor; a row opens one of its files. Without
+            // this the whole card would open an arbitrary first module.
+            event.stopPropagation();
+            onOpen(row.path);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              event.stopPropagation();
+              onOpen(row.path);
+            }
+          }}
         >
-          {card.modules.map(shortPath).join(" · ")}
-          {card.hiddenModules > 0 ? ` +${card.hiddenModules}` : ""}
+          <rect
+            className="story-card-module-hit"
+            x={card.x + 8}
+            y={row.y - 9}
+            width={card.width - 16}
+            height={13}
+          />
+          <text className="story-card-modules" x={card.x + 14} y={row.y}>
+            {shortPath(row.path)}
+          </text>
+        </g>
+      ))}
+      {card.hiddenModules > 0 ? (
+        <text
+          className="story-card-modules is-more"
+          x={card.x + 14}
+          y={card.y + card.height - 6}
+        >
+          {`+${card.hiddenModules} more`}
         </text>
       ) : null}
     </g>
@@ -93,6 +131,10 @@ function ActorCardShape({
 function StoryScene({ story, selectedId, onSelect }: StorySceneProps) {
   const [hovered, setHovered] = useState<string | null>(null);
   const [hoveredFlow, setHoveredFlow] = useState<string | null>(null);
+  // Clicking a card pins its trace. It deliberately does not select a file:
+  // an actor is a role, and picking one of its modules for the reader would be
+  // arbitrary whenever it has more than one.
+  const [pinned, setPinned] = useState<string | null>(null);
   const [journeyIndex, setJourneyIndex] = useState<number | null>(null);
   const [step, setStep] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -148,6 +190,7 @@ function StoryScene({ story, selectedId, onSelect }: StorySceneProps) {
     setJourneyIndex(index);
     setStep(0);
     setPlaying(true);
+    setPinned(null);
   };
 
   const stopJourney = () => {
@@ -164,7 +207,7 @@ function StoryScene({ story, selectedId, onSelect }: StorySceneProps) {
     [story, selectedId],
   );
   const hop = hops[step] ?? null;
-  const focusActor = hovered ?? (journey ? null : selectedActor);
+  const focusActor = hovered ?? (journey ? null : (pinned ?? selectedActor));
 
   let liveActors: Set<string> | null = null;
   let liveFlows: Set<string> | null = null;
@@ -280,11 +323,13 @@ function StoryScene({ story, selectedId, onSelect }: StorySceneProps) {
               key={card.actor.id}
               card={card}
               state={stateOf(card.actor)}
+              pinned={pinned === card.actor.id}
               onEnter={() => setHovered(card.actor.id)}
               onLeave={() => setHovered(null)}
-              onPick={(module) => {
-                if (module) onSelect(module);
-              }}
+              onPin={() =>
+                setPinned((current) => (current === card.actor.id ? null : card.actor.id))
+              }
+              onOpen={onSelect}
             />
           ))}
 

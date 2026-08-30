@@ -1986,7 +1986,7 @@ function App() {
         <p>
           {view === "story" ? (
             <>
-              Pick a journey to follow the data · hover a part to see what it touches · click it to open it on the map
+              Pick a journey to follow the data · hover a part to see what it touches · click a part to keep it lit, or a file on it to open that file
             </>
           ) : view === "map" ? (
             <>

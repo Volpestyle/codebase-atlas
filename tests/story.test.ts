@@ -89,6 +89,46 @@ test("cards in one column stack without overlapping", () => {
   }
 });
 
+test("every module gets its own row, inside the card and not overlapping", () => {
+  const many = {
+    ...story,
+    actors: story.actors.map((actor) =>
+      actor.id === "brain"
+        ? { ...actor, modules: ["src/mind", "src/tools.ts", "src/email.ts"] }
+        : actor,
+    ),
+    journeys: [],
+  };
+  const card = buildStoryLayout(many).cards.find((each) => each.actor.id === "brain")!;
+  assert.equal(card.moduleRows.length, 3);
+  assert.equal(card.hiddenModules, 0);
+  assert.deepEqual(
+    card.moduleRows.map((row) => row.path),
+    ["src/mind", "src/tools.ts", "src/email.ts"],
+  );
+  for (let index = 1; index < card.moduleRows.length; index += 1) {
+    assert.ok(card.moduleRows[index].y > card.moduleRows[index - 1].y, "rows overlap");
+  }
+  const last = card.moduleRows[card.moduleRows.length - 1];
+  assert.ok(last.y <= card.y + card.height, "a row escaped its card");
+  assert.ok(card.moduleRows[0].y > card.y, "a row sits above its card");
+});
+
+test("modules past the cap are counted, not drawn", () => {
+  const overflowing = {
+    ...story,
+    actors: story.actors.map((actor) =>
+      actor.id === "brain"
+        ? { ...actor, modules: Array.from({ length: 9 }, (_, i) => `src/m${i}.ts`) }
+        : actor,
+    ),
+    journeys: [],
+  };
+  const card = buildStoryLayout(overflowing).cards.find((c) => c.actor.id === "brain")!;
+  assert.equal(card.moduleRows.length, 6);
+  assert.equal(card.hiddenModules, 3);
+});
+
 test("a journey step against a flow reads as its return text", () => {
   const hops = journeyHops(story.journeys[0], story.flows);
   assert.equal(hops.length, 6);

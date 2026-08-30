@@ -2222,6 +2222,28 @@ body.is-resizing-panels * {
   fill: var(--faint);
   font-size: var(--fs-label);
   letter-spacing: 0.04em;
+  pointer-events: none;
+}
+
+.story-card-modules.is-more {
+  fill: var(--faint);
+  font-style: italic;
+}
+
+/* Each module is its own target, so the row highlights on its own rather than
+   the whole card lighting up for a click that opens one file. */
+.story-card-module-hit {
+  fill: transparent;
+}
+
+.story-card-module:hover .story-card-module-hit,
+.story-card-module:focus-visible .story-card-module-hit {
+  fill: var(--ink-wash);
+}
+
+.story-card-module:hover .story-card-modules,
+.story-card-module:focus-visible .story-card-modules {
+  fill: var(--rust);
 }
 
 /* Role is the only colour in the view, so the legend is the layout itself. */
@@ -2251,6 +2273,12 @@ body.is-resizing-panels * {
 .story-card:hover .story-card-plate,
 .story-card:focus-visible .story-card-plate {
   stroke: var(--rust);
+}
+
+/* A pinned card keeps its trace after the pointer leaves. */
+.story-card.is-pinned .story-card-plate {
+  stroke: var(--rust);
+  stroke-width: 1.8;
 }
 
 .story-card.is-on .story-card-plate {

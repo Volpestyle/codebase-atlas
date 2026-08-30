@@ -21,7 +21,10 @@ export const MARGIN_BOTTOM = 56;
 const CARD_PAD = 14;
 const NAME_H = 22;
 const BLURB_LINE_H = 16;
-const MODULES_H = 18;
+// Each module gets its own row so it can be clicked on its own. An actor made
+// of five files that opens only the first is a card that lies about itself.
+const MODULE_ROW_H = 13;
+const MODULES_GAP = 8;
 
 // Characters per line at the blurb's serif size inside a card's padding. The
 // story view lays itself out rather than measuring the DOM, so the whole
@@ -30,7 +33,9 @@ const BLURB_CHARS = 30;
 // Beyond this a blurb is an essay, not a caption; the tail is dropped so one
 // long-winded actor cannot stretch its whole column.
 const MAX_BLURB_LINES = 5;
-export const MAX_CARD_MODULES = 3;
+// Past this an actor is a directory listing, not a role; the tail is counted
+// rather than drawn.
+export const MAX_CARD_MODULES = 6;
 
 /** Greedy word wrap to a character budget, longest overflow elided. */
 export function wrapText(text: string, chars: number, maxLines: number): string[] {
@@ -65,8 +70,9 @@ export interface ActorCard {
   width: number;
   height: number;
   blurbLines: string[];
-  /** Module paths shown on the card, and how many were left off. */
-  modules: string[];
+  /** One clickable row per module this actor is made of, with its baseline. */
+  moduleRows: { path: string; y: number }[];
+  /** Modules past the cap, counted but not drawn. */
   hiddenModules: number;
 }
 
@@ -99,9 +105,12 @@ export interface StoryLayout {
 
 export const flowKey = (flow: StoryFlow) => `${flow.from}→${flow.to}`;
 
-function cardHeight(blurbLines: number, hasModules: boolean) {
+function cardHeight(blurbLines: number, moduleCount: number) {
   return (
-    CARD_PAD * 2 + NAME_H + blurbLines * BLURB_LINE_H + (hasModules ? MODULES_H : 0)
+    CARD_PAD * 2 +
+    NAME_H +
+    blurbLines * BLURB_LINE_H +
+    (moduleCount > 0 ? MODULES_GAP + moduleCount * MODULE_ROW_H : 0)
   );
 }
 
@@ -124,18 +133,23 @@ export function buildStoryLayout(story: Story): StoryLayout {
     const column = columnOf.get(actor.role) ?? 0;
     const blurbLines = wrapText(actor.blurb, BLURB_CHARS, MAX_BLURB_LINES);
     const all = actor.modules ?? [];
-    const modules = all.slice(0, MAX_CARD_MODULES);
-    const height = cardHeight(blurbLines.length, modules.length > 0);
+    const shown = all.slice(0, MAX_CARD_MODULES);
+    const height = cardHeight(blurbLines.length, shown.length);
+    const top = nextY[column];
+    const rowsTop = top + CARD_PAD + NAME_H + blurbLines.length * BLURB_LINE_H + MODULES_GAP;
     cards.push({
       actor,
       column,
       x: columns[column].x,
-      y: nextY[column],
+      y: top,
       width: CARD_W,
       height,
       blurbLines,
-      modules,
-      hiddenModules: all.length - modules.length,
+      moduleRows: shown.map((path, index) => ({
+        path,
+        y: rowsTop + index * MODULE_ROW_H,
+      })),
+      hiddenModules: all.length - shown.length,
     });
     nextY[column] += height + CARD_GAP;
   }
