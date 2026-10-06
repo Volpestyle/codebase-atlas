@@ -10,6 +10,9 @@ import Stat from "./ui/Stat";
 import RepositoryScene, { type RepositorySceneHandle } from "./RepositoryScene";
 import FlowScene from "./FlowScene";
 import StoryScene from "./StoryScene";
+import AtlasWorkspace from "./AtlasWorkspace";
+import { useTheme } from "./ui/useTheme";
+import "./Atlas.css";
 import { scanGitHubRepository } from "./github";
 import {
   connectPairing,
@@ -302,13 +305,13 @@ function readSavedSource(): SavedSource | null {
       return { kind: "companion", host: saved.host, token: saved.token, path: saved.path };
     }
   } catch {
-    localStorage.removeItem(LAST_SOURCE_KEY);
+    try { localStorage.removeItem(LAST_SOURCE_KEY); } catch { /* Storage unavailable. */ }
   }
   return null;
 }
 
 function saveSource(source: SavedSource) {
-  localStorage.setItem(LAST_SOURCE_KEY, JSON.stringify(source));
+  try { localStorage.setItem(LAST_SOURCE_KEY, JSON.stringify(source)); } catch { /* Storage unavailable. */ }
 }
 
 function readSavedCompanion(): SavedCompanion | null {
@@ -325,16 +328,18 @@ function readSavedCompanion(): SavedCompanion | null {
       return { host: saved.host, token: saved.token };
     }
   } catch {
-    localStorage.removeItem(LAST_COMPANION_KEY);
+    try { localStorage.removeItem(LAST_COMPANION_KEY); } catch { /* Storage unavailable. */ }
   }
   return null;
 }
 
 function saveCompanionConnection(host: string, token: string) {
-  localStorage.setItem(LAST_COMPANION_KEY, JSON.stringify({ host, token }));
+  try { localStorage.setItem(LAST_COMPANION_KEY, JSON.stringify({ host, token })); } catch { /* Storage unavailable. */ }
 }
 
 function App() {
+  const { theme, toggleTheme } = useTheme();
+
   const [graph, setGraph] = useState<RepositoryGraph | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -869,8 +874,6 @@ function App() {
   const focusOffset = selectedNode ? surveyOffset(selectedNode, surveyDepth) : 0;
   const visibleLayerCount = Object.values(layers).filter(Boolean).length;
   const layerCount = Object.keys(layers).length;
-  const importEdgeCount =
-    graph?.edges.reduce((count, edge) => count + (edge.kind === "imports" ? 1 : 0), 0) ?? 0;
   const sharePairingUrl =
     shareStatus?.enabled && shareStatus.token ? pairingUrlFromStatus(shareStatus) : null;
   const shareQrSvg = useMemo(
@@ -884,7 +887,7 @@ function App() {
   const contained = graph && selectedNode ? childNodes(graph, selectedNode.id) : [];
 
   return (
-    <div className="app-shell" ref={shellRef} style={panelStyle}>
+    <div className={`app-shell${view === "story" ? " atlas-shell" : ""}`} ref={shellRef} style={panelStyle}>
       <a className="skip-link" href="#repository-map">
         Skip to code map
       </a>
@@ -1198,68 +1201,16 @@ function App() {
         onDetect={(text) => void applyPairingText(text)}
       />
 
-      <header className="instrument-bar">
-        <div className="brand-block" aria-label="Codebase Atlas">
-          <span className="section-index brand-index">CA / 01</span>
-          <strong>CODEBASE ATLAS</strong>
-          <PanelResizeHandle
-            label="Resize modules panel"
-            controlsId="module-rail"
-            edge="end"
-            value={widths.rail}
-            min={MIN_RAIL_WIDTH}
-            max={railMax}
-            defaultValue={DEFAULT_RAIL_WIDTH}
-            tabIndex={-1}
-            onChange={previewRail}
-            onCommit={commitRail}
-          />
-        </div>
-
-        <button
-          className="mobile-rail-button"
-          type="button"
-          onClick={() => setRailOpen(true)}
-          aria-controls="module-rail"
-          aria-expanded={railOpen}
-        >
-          Modules
-        </button>
-
-        <div className="instrument-readings" aria-label="Repository summary">
-          <Stat
-            className="instrument-reading repository-reading"
-            label="Repository"
-            value={graph?.name ?? "No source"}
-            title={graph?.root}
-          />
-          <Stat
-            className="instrument-reading branch-reading"
-            label="Branch"
-            value={graph?.branch ?? "--"}
-          />
-          <Stat
-            className="instrument-reading metric-reading"
-            label="Files"
-            value={graph ? graph.stats.files.toLocaleString() : "--"}
-          />
-          <Stat
-            className="instrument-reading metric-reading"
-            label="Lines"
-            value={graph?.stats.lineCountAvailable ? graph.stats.lines.toLocaleString() : "--"}
-          />
-          <Stat
-            className="instrument-reading metric-reading"
-            label="Imports"
-            value={graph?.stats.importsAvailable ? importEdgeCount.toLocaleString() : "--"}
-          />
-          <Stat
-            className="instrument-reading metric-reading languages-reading"
-            label="Languages"
-            value={graph ? graph.stats.languages.length : "--"}
-          />
-        </div>
-
+      <header className="atlas-header">
+        <div className="atlas-brand"><strong>atlas</strong><span>{graph?.name ?? "No source"} · {graph?.branch ?? "—"}</span></div>
+        <nav className="atlas-nav" aria-label="Lens">
+          <button aria-current={view === "story" ? "page" : undefined} onClick={() => setView("story")}>How it works</button>
+          <details className="atlas-more"><summary>More views</summary><div>
+            <button onClick={() => setView("map")}>3D map</button><button onClick={() => setView("flow")}>Import flow</button>
+          </div></details>
+          <button onClick={toggleTheme} aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}>{theme === "light" ? "Dark" : "Light"}</button>
+        </nav>
+        <details className="source-menu"><summary>Source</summary>
         <div className="source-actions">
           <input
             ref={mapFileInputRef}
@@ -1336,9 +1287,10 @@ function App() {
               <b>{loading ? "Scanning" : "Scan directory"}</b>
             </button>
           ) : null}
-        </div>
+        </div></details>
       </header>
 
+      {view === "story" && graph ? <AtlasWorkspace graph={graph} searchQuery={searchQuery} onSearch={setSearchQuery} searchRef={searchRef} results={filteredNodes} selectedId={selectedId} onOpenFile={id => { setView("map"); selectNode(id); }} /> : (
       <div className="workspace" ref={workspaceRef}>
         <button
           className={`workspace-curtain ${railOpen || inspectorOpen ? "is-active" : ""}`}
@@ -1609,6 +1561,7 @@ function App() {
               ) : view === "map" ? (
                 <>
                   <RepositoryScene
+                    key={theme}
                     ref={sceneRef}
                     graph={graph}
                     selectedId={selectedId}
@@ -1626,6 +1579,7 @@ function App() {
                 </>
               ) : (
                 <FlowScene
+                  key={theme}
                   graph={graph}
                   selectedId={selectedId}
                   searchQuery={searchQuery}
@@ -1977,6 +1931,7 @@ function App() {
           ) : null}
         </aside>
       </div>
+      )}
 
       <footer className="status-strip">
         <div>

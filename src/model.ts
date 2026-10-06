@@ -1,3 +1,4 @@
+import type { FigureName } from "./storyFigures.ts";
 export type RepositoryNodeKind =
   | "repository"
   | "directory"
@@ -81,6 +82,7 @@ export const ROLE_HEADINGS: Record<ActorRole, string> = {
 };
 
 export interface StoryActor {
+  figure?: FigureName;
   id: string;
   name: string;
   role: ActorRole;

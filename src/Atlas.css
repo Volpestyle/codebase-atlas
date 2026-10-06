@@ -1,0 +1,38 @@
+.atlas-header { display:flex; align-items:center; gap:24px; padding:10px max(24px, calc((100vw - 1280px)/2)); min-height:72px; border-bottom:1px solid var(--line); font-family:var(--font-sans); font-size:14px; flex-wrap:wrap; }
+.atlas-brand { display:flex; align-items:baseline; gap:10px; min-width:0; }
+.atlas-brand strong { font-size:18px; font-weight:500; letter-spacing:-.03em; }
+.atlas-brand span { color:var(--muted); font-size:13px; overflow-wrap:anywhere; }
+.atlas-nav { display:flex; align-items:center; gap:4px; margin-left:auto; }
+.atlas-header button, .atlas-header summary { font:inherit; background:transparent; cursor:pointer; border-radius:8px; padding:0 12px; min-height:44px; display:flex; align-items:center; color:var(--muted); }
+.atlas-header button[aria-current="page"], .atlas-header button:hover, .atlas-header summary:hover { color:var(--ink); background:var(--pill); }
+.atlas-more, .source-menu { position:relative; }
+.atlas-more > div, .source-menu > .source-actions { position:absolute; top:100%; right:0; z-index:100; background:var(--card); border:1px solid var(--line); border-radius:14px; box-shadow:var(--card-shadow); padding:8px; width:200px; display:flex; flex-direction:column; align-items:stretch; }
+.source-menu .source-actions { margin:0; }
+.source-menu .source-actions button { width:100%; border:0; white-space:nowrap; }
+.source-menu .source-actions b { font-weight:400; }
+.source-menu .source-actions button > span { display:none; }
+.app-shell.atlas-shell { height:100%; overflow:auto; display:block; font:14px/1.6 var(--font-sans); background:var(--bg); }
+.atlas-workspace { max-width:1280px; margin:0 auto; padding:46px 0 60px; display:grid; grid-template-columns:220px minmax(0,1fr); gap:48px; }
+.atlas-sidebar { min-width:0; color:var(--body); }
+.atlas-sidebar p { margin:12px 10px; }
+.atlas-kicker { color:var(--muted); font-size:13px; }
+.atlas-search { display:flex; align-items:center; gap:8px; border-radius:8px; background:var(--pill); padding:0 10px; min-height:44px; }
+.atlas-search input { width:100%; min-width:0; background:transparent; border:0; font:13px var(--font-sans); outline-offset:4px; }
+.atlas-search kbd { color:var(--muted); font:12px var(--font-mono); }
+.atlas-search-results { max-height:420px; overflow:auto; margin-top:8px; }
+.atlas-search-results button { width:100%; background:transparent; text-align:left; padding:10px; min-height:44px; font:12px var(--font-mono); overflow-wrap:anywhere; cursor:pointer; }
+.atlas-search-results button:hover { background:var(--pill); }
+.atlas-main { min-width:0; }
+.atlas-main h1 { font-size:18px; line-height:1.35; font-weight:500; margin:0; letter-spacing:-.01em; }
+.atlas-main h1 em, .atlas-main h2 em { font:italic 1.2em var(--font-serif); }
+.atlas-main h2 { font-size:15px; font-weight:500; }
+.atlas-empty { padding:40px 0; max-width:650px; }
+.atlas-main code { font:12px var(--font-mono); overflow-wrap:anywhere; }
+.atlas-shell .status-strip { padding:16px 24px; flex-wrap:wrap; height:auto; }
+.part-figure { aspect-ratio:5/4; width:100%; }
+.atlas-shell button:focus-visible, .atlas-header button:focus-visible, summary:focus-visible { outline:2px solid var(--ink); outline-offset:3px; }
+@media(max-width:1350px) { .atlas-workspace { margin:0 32px; } }
+@media(max-width:1050px) { .atlas-workspace { grid-template-columns:190px minmax(0,1fr); gap:28px; } .atlas-header { gap:12px; padding:12px 24px; } .atlas-brand { flex:1; } .atlas-nav { order:3; width:100%; margin:0; } }
+@media(max-width:800px) { .atlas-workspace { grid-template-columns:minmax(0,1fr); padding-top:24px; gap:24px; margin:0 24px; } .atlas-sidebar { display:flex; gap:8px; flex-wrap:wrap; } .atlas-search { width:100%; } .atlas-sidebar > p { display:none; } }
+@media(max-width:480px) { .atlas-header { padding:10px 16px; gap:6px; } .atlas-brand span { font-size:11px; } .atlas-header button, .atlas-header summary { font-size:12px; padding:0 8px; } .atlas-nav { flex-wrap:wrap; } .atlas-workspace { margin:0 16px; } }
+@media(prefers-reduced-motion:reduce) { *, *::before, *::after { scroll-behavior:auto!important; } }

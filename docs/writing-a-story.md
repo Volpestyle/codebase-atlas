@@ -49,3 +49,7 @@ Coverage and the brief’s code-module digest use the same rule, implemented in 
 Actor modules cover their source files and descendants; overlapping actor modules count each file once. Coverage uses counted lines from the fresh scan and is informational. `atlas story check` exits 1 only for story validation warnings or no usable story. Other scan warnings, including truncation, skipped entries, and stale summaries, are printed as information and do not invalidate a story. A partial scan or unavailable line counts still limit what coverage can say.
 
 The brief partitions code files into at most 150 modules at the deepest level that fits, collapses single-child directory chains, and lists each module once without ancestor totals. Docs/config contribute one short line count, with the same hidden/generated exclusions. Import edges to directory targets are included when that directory resolves to one listed module; ambiguous or excluded targets are counted as omissions.
+
+## Part figures
+
+An actor may set `figure` to a Hairline name: `riffle`, `terrain`, `exploded`, `phosphor`, `slow`, `elevator`, `turntable`, `lockers`, `cabinet`, `vault`, `terminal`, `laptop`, `phone`, `keyboard`, `branches`, `loupe`, `padlock`, `patch`, `dish`, `router`, `sieve`, `rail`, `plug`, `query`, `drawer`, `basket`, or `plot`. Unknown names warn and fall back to the role default. Defaults: surface → terminal, door → padlock, core → riffle, store → cabinet, external → branches. People always render as text, with no figure. Figures are presentation, not inferred code behavior.

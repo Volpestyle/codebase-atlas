@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "summary": "Codebase Atlas reads a folder of code and draws it three ways. It never runs the code or changes it \u2014 it reads the files, works out which ones use which, and turns that into a map you can look around, a diagram of how work flows between the parts, and a plain-English story of what the whole thing does. The story is the only part it cannot work out on its own: somebody writes that down, and Atlas checks it against what it just read.",
+  "summary": "Codebase Atlas reads a folder of code and draws it three ways. It never runs the code or changes it — it reads the files, works out which ones use which, and turns that into a map you can look around, a diagram of how work flows between the parts, and a plain-English story of what the whole thing does. The story is the only part it cannot work out on its own: somebody writes that down, and Atlas checks it against what it just read.",
   "actors": [
     {
       "id": "reader",
@@ -22,7 +22,8 @@
       "modules": [
         "src-tauri/src/app.rs",
         "src-tauri/src/main.rs"
-      ]
+      ],
+      "figure": "laptop"
     },
     {
       "id": "cli",
@@ -32,7 +33,8 @@
       "modules": [
         "src-tauri/src/cli.rs",
         "src-tauri/src/bin/atlas.rs"
-      ]
+      ],
+      "figure": "terminal"
     },
     {
       "id": "companion",
@@ -43,7 +45,8 @@
         "src-tauri/src/companion.rs",
         "src/companion.ts",
         "src/PairingScanner.tsx"
-      ]
+      ],
+      "figure": "phone"
     },
     {
       "id": "reader-engine",
@@ -52,17 +55,19 @@
       "blurb": "Walks the folder, skips what git ignores, and measures every file it keeps.",
       "modules": [
         "src-tauri/src/scanner.rs"
-      ]
+      ],
+      "figure": "riffle"
     },
     {
       "id": "parser",
       "name": "The parser",
       "role": "core",
-      "blurb": "Actually reads the code to find what each file declares and which other files it uses \u2014 no guessing from filenames.",
+      "blurb": "Actually reads the code to find what each file declares and which other files it uses — no guessing from filenames.",
       "modules": [
         "src-tauri/src/symbols.rs",
         "src-tauri/src/imports.rs"
-      ]
+      ],
+      "figure": "loupe"
     },
     {
       "id": "storykeeper",
@@ -71,7 +76,8 @@
       "blurb": "Reads the hand-written story and throws out any part that no longer matches the code, saying which.",
       "modules": [
         "src-tauri/src/story.rs"
-      ]
+      ],
+      "figure": "sieve"
     },
     {
       "id": "graph",
@@ -81,7 +87,8 @@
       "modules": [
         "src/model.ts",
         "src-tauri/src/lib.rs"
-      ]
+      ],
+      "figure": "cabinet"
     },
     {
       "id": "views",
@@ -93,19 +100,22 @@
         "src/RepositoryScene.tsx",
         "src/FlowScene.tsx",
         "src/App.tsx"
-      ]
+      ],
+      "figure": "exploded"
     },
     {
       "id": "folder",
       "name": "A folder of code",
       "role": "external",
-      "blurb": "Somebody's repository, sitting on a disk. Only ever read, never written to."
+      "blurb": "Somebody's repository, sitting on a disk. Only ever read, never written to.",
+      "figure": "drawer"
     },
     {
       "id": "written-story",
       "name": "The hand-written story",
       "role": "external",
-      "blurb": "A short account of what the code is for, written by a person or an agent. No parser can work this out."
+      "blurb": "A short account of what the code is for, written by a person or an agent. No parser can work this out.",
+      "figure": "query"
     },
     {
       "id": "github",
@@ -115,7 +125,8 @@
       "modules": [
         "src/github.ts",
         "src/github-url.ts"
-      ]
+      ],
+      "figure": "branches"
     }
   ],
   "flows": [
@@ -247,7 +258,7 @@
     },
     {
       "name": "An iPad borrows a computer's eyes",
-      "blurb": "The tablet never holds the code \u2014 the computer reads and sends the result.",
+      "blurb": "The tablet never holds the code — the computer reads and sends the result.",
       "steps": [
         "reader",
         "companion",

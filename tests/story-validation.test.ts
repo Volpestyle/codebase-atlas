@@ -162,3 +162,18 @@ test("GitHub continues for missing, oversized, malformed, and unreadable stories
     }
   }
 });
+
+test("known figures survive and unknown figures warn and use role defaults", () => {
+  for (const figure of ["riffle", "loupe", "phone", "unknown", ""]) {
+    const body = { ...good(), actors: [{ ...good().actors[1], figure }], flows: [], journeys: [] };
+    const warnings: string[] = [];
+    const story = readStory(JSON.stringify(body), new Set(["web"]), warnings)!;
+    if (figure === "unknown" || figure === "") {
+      assert.equal(story.actors[0].figure, undefined);
+      assert.deepEqual(warnings, [`Story: actor "api" has unknown figure "${figure}"; using the role default.`]);
+    } else {
+      assert.equal(story.actors[0].figure, figure);
+      assert.deepEqual(warnings, []);
+    }
+  }
+});

@@ -14,6 +14,36 @@ use serde::{Deserialize, Serialize};
 /// The file is small and hand-written; a runaway one is a mistake, not a repo.
 pub(crate) const MAX_BYTES: u64 = 256 * 1024;
 
+const FIGURE_NAMES: &[&str] = &[
+    "riffle",
+    "terrain",
+    "exploded",
+    "phosphor",
+    "slow",
+    "elevator",
+    "turntable",
+    "lockers",
+    "cabinet",
+    "vault",
+    "terminal",
+    "laptop",
+    "phone",
+    "keyboard",
+    "branches",
+    "loupe",
+    "padlock",
+    "patch",
+    "dish",
+    "router",
+    "sieve",
+    "rail",
+    "plug",
+    "query",
+    "drawer",
+    "basket",
+    "plot",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Story {
@@ -53,6 +83,8 @@ pub(crate) struct Actor {
     /// an outside service) have none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub modules: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub figure: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,6 +163,18 @@ fn validate(story: &mut Story, node_ids: &BTreeSet<&str>, warnings: &mut Vec<Str
         true
     });
 
+    for actor in &mut story.actors {
+        if let Some(figure) = &actor.figure {
+            if !FIGURE_NAMES.contains(&figure.as_str()) {
+                warnings.push(format!(
+                    "Story: actor \"{}\" has unknown figure \"{figure}\"; using the role default.",
+                    actor.id
+                ));
+                actor.figure = None;
+            }
+        }
+    }
+
     let mut unknown_modules = Vec::new();
     for actor in &mut story.actors {
         actor.modules.retain(|module| {
@@ -175,9 +219,10 @@ fn validate(story: &mut Story, node_ids: &BTreeSet<&str>, warnings: &mut Vec<Str
         })
         .collect();
     story.journeys.retain(|journey| {
-        let broken = journey.steps.windows(2).find(|pair| {
-            !connected.contains(&(pair[0].as_str(), pair[1].as_str()))
-        });
+        let broken = journey
+            .steps
+            .windows(2)
+            .find(|pair| !connected.contains(&(pair[0].as_str(), pair[1].as_str())));
         match broken {
             Some(pair) => {
                 warnings.push(format!(
@@ -240,15 +285,20 @@ mod tests {
         let root = tempfile::tempdir().expect("temp dir");
         write(
             root.path(),
-            &GOOD.replace(r#"["user","api","brain","api","user"]"#, r#"["user","brain"]"#),
+            &GOOD.replace(
+                r#"["user","api","brain","api","user"]"#,
+                r#"["user","brain"]"#,
+            ),
         );
         let mut warnings = Vec::new();
         let story = attach_story(root.path(), &ids(&["."]), &mut warnings).expect("story parsed");
 
         assert!(story.journeys.is_empty());
-        assert!(warnings
-            .iter()
-            .any(|warning| warning.contains("no flow from user to brain")));
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("no flow from user to brain"))
+        );
     }
 
     #[test]
@@ -266,5 +316,33 @@ mod tests {
         let mut warnings = Vec::new();
         assert!(attach_story(root.path(), &ids(&["."]), &mut warnings).is_none());
         assert_eq!(warnings.len(), 1);
+    }
+    #[test]
+    fn figures_are_optional_and_unknown_figures_warn_and_fall_back() {
+        let root = tempfile::tempdir().expect("temp dir");
+        write(
+            root.path(),
+            &GOOD.replace(
+                "\"role\":\"door\"",
+                "\"role\":\"door\",\"figure\":\"loupe\"",
+            ),
+        );
+        let mut warnings = Vec::new();
+        let story = attach_story(root.path(), &ids(&["web", "gone"]), &mut warnings).unwrap();
+        assert_eq!(story.actors[1].figure.as_deref(), Some("loupe"));
+        assert!(warnings.is_empty());
+        write(
+            root.path(),
+            &GOOD.replace(
+                "\"role\":\"door\"",
+                "\"role\":\"door\",\"figure\":\"unknown\"",
+            ),
+        );
+        let story = attach_story(root.path(), &ids(&["web", "gone"]), &mut warnings).unwrap();
+        assert!(story.actors[1].figure.is_none());
+        assert_eq!(
+            warnings,
+            ["Story: actor \"api\" has unknown figure \"unknown\"; using the role default."]
+        );
     }
 }

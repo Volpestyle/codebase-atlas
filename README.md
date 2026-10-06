@@ -2,6 +2,8 @@
 
 Codebase Atlas is a read-only repository graph engine with a Rust API, CLI, HTTP API, and interactive visualizer for local directories and public GitHub repositories. It opens on a plain-English story of how the code works — the parts a reader would recognize and what travels between them — and drills into two reference views over the same repository: an orthographic 3D field with searchable modules, language statistics, import flow arcs, layer controls, and a synchronized inspector, and an import-flow diagram.
 
+The interface uses a monochrome Hairline palette, offline Geist fonts and Instrument Serif accents. Theme follows the system until a Light/Dark preference is saved on the device.
+
 The application runs as a web app, a Tauri 2 desktop app on macOS, Windows, and Linux, and a Tauri iOS app on iPhone and iPad. It uses React 19, TypeScript, and Three.js.
 
 ## Architecture
@@ -98,7 +100,8 @@ flowchart LR
 - **Honest metrics:** local scans count lines from bounded text files. GitHub Trees provide file sizes but not contents, so GitHub maps encode size and mark line counts and import edges unavailable. The web reads a committed story at no model cost; it does not fetch per-file summaries or source contents. A failed story fetch warns without failing the map.
 - **Bounded work:** scans stop at 4,000 nodes, the scene renders at most 700 nodes, local line counting skips files larger than 2 MiB, and the symbol index stops at 128 declarations per file and 60,000 overall so a generated surface cannot bloat a map that also travels to a paired device. Full scan statistics and the searchable index remain available when rendering is capped.
 - **Event-driven rendering:** the scene redraws for camera or state changes instead of running a permanent animation loop.
-- **In-repo design system:** the technical-manual olive/paper look lives in `src/ui/` as three layers — `tokens.css` (every color, surface, and type size as CSS custom properties, including the kind palette and the 3D map palette), `ui.css` plus small React primitives (`SectionHeading`, `Seg`, `Stat`, `Register`, `KindMark`) for markup patterns used across features, and `theme.ts`, which reads the tokens off the document so the Three.js scene and canvas labels follow the same palette. Restyling means editing tokens, not chasing literals; an external component library was rejected because the aesthetic is bespoke and the primitive count is small.
+- **Hairline presentation:** `ui/tokens.css` defines light/dark monochrome surfaces for the shell and every renderer, including the legacy map through `ui/theme.ts`. Fonts are bundled for offline use. Optional story figures use Hairline’s React components and role defaults; [the authoring rules](docs/writing-a-story.md#part-figures) define their names. Source actions live in the Source menu; the 3D map and import flow remain under More views.
+- **In-repo design system:** the monochrome Hairline look lives in `src/ui/` as three layers — `tokens.css` (every color, surface, and type size as CSS custom properties, including the kind palette and the 3D map palette), `ui.css` plus small React primitives (`SectionHeading`, `Seg`, `Stat`, `Register`, `KindMark`) for markup patterns used across features, and `theme.ts`, which reads the tokens off the document so the Three.js scene and canvas labels follow the same palette. Restyling means editing tokens, not chasing literals; an external component library was rejected because the aesthetic is bespoke and the primitive count is small.
 
 ```mermaid
 flowchart TD
@@ -224,6 +227,9 @@ pnpm blocks every script, `pnpm test` included, not just the install.
 
 ```text
 src/
+  AtlasWorkspace.tsx      narrative workspace and code search
+  Atlas.css               responsive Hairline shell
+  storyFigures.ts         figure catalogue and role defaults
   App.tsx                 application state and accessible shell
   ui/                     design system: tokens.css, ui.css, theme.ts, primitives
   PanelResizeHandle.tsx   draggable panel dividers

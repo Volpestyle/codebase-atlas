@@ -1,3 +1,4 @@
+import { FIGURE_NAMES, type FigureName } from "./storyFigures.ts";
 import { ACTOR_ROLES, type ActorRole, type Story } from "./model.ts";
 
 export const MAX_STORY_BYTES = 256 * 1024;
@@ -40,6 +41,7 @@ function parseStory(value: unknown): Story {
         name: string(actor.name),
         role: role as ActorRole,
         blurb: string(actor.blurb),
+        figure: optionalString(actor.figure) as FigureName | undefined,
         modules: array(actor.modules === undefined ? [] : actor.modules).map(string),
       };
     }),
@@ -92,6 +94,13 @@ export function readStory(
     seen.add(actor.id);
     return true;
   });
+
+  for (const actor of story.actors) {
+    if (actor.figure !== undefined && !FIGURE_NAMES.includes(actor.figure)) {
+      warnings.push(`Story: actor "${actor.id}" has unknown figure "${actor.figure}"; using the role default.`);
+      delete actor.figure;
+    }
+  }
 
   const unknownModules: string[] = [];
   for (const actor of story.actors) {
