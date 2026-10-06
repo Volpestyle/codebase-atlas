@@ -49,6 +49,7 @@
 .atlas-content button, .atlas-sidebar button { font:inherit; color:inherit; cursor:pointer; background:transparent; }
 .atlas-journeys { width:100%; margin:20px 0; }
 .atlas-journeys button { display:flex; gap:12px; align-items:center; justify-content:space-between; width:100%; text-align:left; padding:10px; min-height:44px; border-radius:8px; line-height:1.4; }
+.atlas-journeys button > .atlas-mono { white-space:nowrap; flex-shrink:0; }
 .atlas-journeys button:hover, .atlas-journeys button[aria-pressed="true"] { background:var(--pill); }
 .atlas-transit-scroll { overflow-x:auto; overscroll-behavior-x:contain; }
 /* A soft edge says more of the map is off to that side. */
