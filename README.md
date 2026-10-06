@@ -39,7 +39,7 @@ flowchart LR
     G --> I[Searchable module index]
     G --> J[Three.js orthographic scene]
     G --> P[SVG import flow diagram]
-    G --> N[SVG story diagram]
+    G --> N[Journey transit map and part cards]
     G --> K[Node inspector]
     I <--> J
     I <--> P
@@ -175,7 +175,9 @@ flowchart LR
   Peek --> Scale
 ```
 - Toggle structure, source, config, documentation, tests, and import layers independently. The tests layer — files matching `*.test.*`/`*.spec.*`/`*_test.*` and everything under support directories like `test/` and `fixtures/` — starts hidden so the map leads with the product code; its toggle brings it back.
-- Switch between **story**, **map**, and **flow** above the scene. Story opens first: a plain-English account of what the repository is, the parts a reader would recognize laid out left to right from the people who use it to the outside services it calls, and named journeys that follow one piece of data all the way through. Play a journey to watch it hop, one sentence at a time, with the diagram scrolling to keep up; hover any arrow to read what travels along it and what comes back, or click it to keep that open while you read both ends, each listed as files you can open; click a part to keep it lit while you read around it. Each part lists the files it is made of, and each of those opens on the map on its own — an actor is a role, so opening one arbitrary file for the whole card would misrepresent what it is. Story needs a `.codebase-index/_story.json`; without one the view says so and explains how to write it. Flow lays the same modules out by import direction — animated pulses run along each edge from importer to imported, line weight encodes import count, and chip size scales with the module. Large chips fill their extra area with a nested treemap of what they contain (click a cell to inspect that child) instead of a description; cells look through wrapper directories like `src` and `lib` to name the module's actual parts, and support directories (`test`, `fixtures`) render muted so the functional cells carry the chip. Selecting a chip (click or tap) dims everything except its transitive upstream and downstream. Clicking a route opens what crosses it — the union of bindings from every file-level import the route merges, which is what makes an aggregated arc mean something more than "these two touch". Flow needs import edges, so it asks for a local scan or an exported map when the source is GitHub.
+- **How it works** opens first. Pick a written journey in the sidebar, then use Prev/Play/Next or a step tick to follow its data. The base transit network stays faint, visited routes turn ink, upcoming routes are dashed, and a packet follows the current connection. Select a station or part card to read its written exchanges and scanned files/import crossings. People stay text; code and outside systems have Hairline figures. The transit card scrolls horizontally on narrow screens and follows the current hop, respecting reduced motion. A connection can also be selected directly to read its carries/returns text.
+- **More views** keeps the 3D map and import flow reachable. Their existing selection, depth controls, module search, route inspection, and camera shortcuts still operate. Without a story, the landing screen explains `atlas story brief` and `atlas story check`; map and flow remain available. The Source menu retains Scan directory, Share/Computer, GitHub URL, and Open/Save map.
+
 - Drag the survey slider to set how many directory levels both views render by default (default 2; the top stop shows all). Import edges aggregate to the visible level, so a coarse survey shows package-to-package flow. Opening a district does not move the slider.
 - Drag the module or inspector dividers to resize the side panels. Double-click a divider to restore its default width. The chosen widths persist for the next launch.
 - Search (`/`) matches a module's name, path, language, `.codebase-index` summary, and the names it declares, so typing a function name finds the file that defines it and the files that take it.
@@ -227,7 +229,11 @@ pnpm blocks every script, `pnpm test` included, not just the install.
 
 ```text
 src/
-  AtlasWorkspace.tsx      narrative workspace and code search
+  AtlasWorkspace.tsx      narrative workspace, journeys, and code search
+  JourneyView.tsx         transit map, stepper, figures, selected part details
+  PartDetails.tsx         written exchanges and scanned files/crossings
+  storyFacts.ts           ownership, exchanges, import crossings, tests
+  transitLayout.ts        role columns, station positions, transit routes
   Atlas.css               responsive Hairline shell
   storyFigures.ts         figure catalogue and role defaults
   App.tsx                 application state and accessible shell

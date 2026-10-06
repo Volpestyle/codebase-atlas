@@ -1290,7 +1290,7 @@ function App() {
         </div></details>
       </header>
 
-      {view === "story" && graph ? <AtlasWorkspace graph={graph} searchQuery={searchQuery} onSearch={setSearchQuery} searchRef={searchRef} results={filteredNodes} selectedId={selectedId} onOpenFile={id => { setView("map"); selectNode(id); }} /> : (
+      {view === "story" && graph ? <AtlasWorkspace key={graph.root} theme={theme} graph={graph} searchQuery={searchQuery} onSearch={setSearchQuery} searchRef={searchRef} results={filteredNodes} selectedId={selectedId} onOpenFile={id => { setView("map"); selectNode(id); }} /> : (
       <div className="workspace" ref={workspaceRef}>
         <button
           className={`workspace-curtain ${railOpen || inspectorOpen ? "is-active" : ""}`}
