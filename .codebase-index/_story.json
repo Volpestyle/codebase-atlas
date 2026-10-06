@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "summary": "Codebase Atlas reads a folder of code and joins scanned facts with a hand-written story. Follow a journey to see what travels between parts, find those parts in the files, and look inside a part at its declarations and imports. It never runs or changes the code. Somebody writes the story; Atlas checks it against the files it read.",
+  "summary": "Codebase Atlas helps people understand how software fits together. It reads a local folder, borrows a computer’s scan, or opens a public repository on GitHub, then joins the file facts with a story written by a person or their coding agent. Three screens let you follow what travels between parts, find their files, and look inside them. Atlas checks story references and reports gaps; it never runs the code or writes the story itself.",
   "actors": [
     {
       "id": "reader",
@@ -10,18 +10,19 @@
     },
     {
       "id": "agent",
-      "name": "An AI agent",
+      "name": "A coding agent",
       "role": "person",
-      "blurb": "Reads the same description as JSON instead of looking at it, to answer questions about the code."
+      "blurb": "Uses Atlas’s rules and scan facts to write the story, then checks it. It can also read a scan as JSON to answer questions."
     },
     {
       "id": "desktop",
       "name": "The desktop app",
       "role": "surface",
-      "blurb": "The window on a Mac, Windows or Linux machine. The only place that can open a folder from the disk.",
+      "blurb": "A Mac, Windows or Linux window that asks the local reader to scan a folder and passes the result to the screens.",
       "modules": [
         "src-tauri/src/app.rs",
-        "src-tauri/src/main.rs"
+        "src-tauri/src/main.rs",
+        "src-tauri/build.rs"
       ],
       "figure": "laptop"
     },
@@ -29,20 +30,21 @@
       "id": "cli",
       "name": "The command line",
       "role": "surface",
-      "blurb": "Prints the whole description as JSON, so scripts and agents can read a codebase without a screen.",
+      "blurb": "Runs atlas scan, atlas serve, and atlas story brief or check. Scripts and coding agents can use it without opening a window.",
       "modules": [
         "src-tauri/src/cli.rs",
-        "src-tauri/src/bin/atlas.rs"
+        "src-tauri/src/bin/atlas.rs",
+        "src-tauri/src/bin/scan.rs",
+        "src-tauri/src/bin/serve.rs"
       ],
       "figure": "terminal"
     },
     {
       "id": "companion",
-      "name": "The iPad companion",
+      "name": "The companion connection",
       "role": "surface",
-      "blurb": "An iPad or phone borrowing a computer's eyes over Wi-Fi. It never holds the code itself.",
+      "blurb": "A phone, iPad or browser pairs with a computer using a code or QR. It receives the scan without copying the repository.",
       "modules": [
-        "src-tauri/src/companion.rs",
         "src/companion.ts",
         "src/PairingScanner.tsx",
         "src/pairingQr.ts"
@@ -51,9 +53,9 @@
     },
     {
       "id": "reader-engine",
-      "name": "The reader",
+      "name": "The folder reader",
       "role": "core",
-      "blurb": "Walks the folder, skips what git ignores, and measures every file it keeps.",
+      "blurb": "Walks a folder, respects ignored paths, counts lines, and gathers code facts and the checked story into one description.",
       "modules": [
         "src-tauri/src/scanner.rs"
       ],
@@ -61,9 +63,9 @@
     },
     {
       "id": "parser",
-      "name": "The parser",
+      "name": "The code parser",
       "role": "core",
-      "blurb": "Actually reads the code to find what each file declares and which other files it uses — no guessing from filenames.",
+      "blurb": "Reads supported code to find declared names and imports. It resolves file links where it can; it does not run the program.",
       "modules": [
         "src-tauri/src/symbols.rs",
         "src-tauri/src/imports.rs"
@@ -74,14 +76,10 @@
       "id": "storykeeper",
       "name": "The story checker",
       "role": "core",
-      "blurb": "Reads the hand-written story and throws out any part that no longer matches the code, saying which.",
+      "blurb": "Checks story parts, file paths, exchanges and journeys against the file list, locally or in the browser. It reports invalid references; it cannot judge whether the prose is true.",
       "modules": [
         "src-tauri/src/story.rs",
-        "src/storyValidation.ts",
-        "src/storyFigures.ts",
-        "src-tauri/src/story_authoring.rs",
-        "src-tauri/src/source_scope.rs",
-        "src/sourceScope.ts"
+        "src/storyValidation.ts"
       ],
       "figure": "sieve"
     },
@@ -89,18 +87,17 @@
       "id": "graph",
       "name": "The one description",
       "role": "store",
-      "blurb": "Everything learned about the codebase in one shape. Every view and every tool reads this and nothing else.",
+      "blurb": "An in-memory description of the files, code facts, checked story and warnings. Local scans include details that GitHub’s file list cannot supply.",
       "modules": [
-        "src/model.ts",
-        "src-tauri/src/lib.rs"
+        "src/model.ts"
       ],
       "figure": "cabinet"
     },
     {
       "id": "views",
-      "name": "The three views",
-      "role": "core",
-      "blurb": "Follow the data, find its territory in the files, then inspect a part’s declarations and imports.",
+      "name": "The three screens",
+      "role": "surface",
+      "blurb": "How it works follows a journey. Where it lives locates the files; Inside a part shows names and imports. Hairline figures mark the parts.",
       "modules": [
         "src/main.tsx",
         "src/App.tsx",
@@ -120,7 +117,10 @@
         "src/journey.ts",
         "src/ui/PartFigure.tsx",
         "src/ui/useTheme.ts",
-        "src/ui/useReducedMotion.ts"
+        "src/ui/useReducedMotion.ts",
+        "index.html",
+        "src/vite-env.d.ts",
+        "src/storyFigures.ts"
       ],
       "figure": "exploded"
     },
@@ -128,123 +128,232 @@
       "id": "folder",
       "name": "A folder of code",
       "role": "external",
-      "blurb": "Somebody's repository, sitting on a disk. Only ever read, never written to.",
+      "blurb": "A repository on a computer’s disk. Atlas reads its files and never runs or changes them.",
       "figure": "drawer"
     },
     {
       "id": "written-story",
       "name": "The hand-written story",
-      "role": "external",
-      "blurb": "A short account of what the code is for, written by a person or an agent. No parser can work this out.",
+      "role": "store",
+      "blurb": "The .codebase-index/_story.json file records parts, exchanges and journeys. A person or coding agent writes it; committing it makes it available on GitHub.",
       "figure": "query"
     },
     {
       "id": "github",
       "name": "GitHub",
       "role": "external",
-      "blurb": "Where public repositories come from when there is no folder on this machine.",
+      "blurb": "Supplies a public repository’s file list and, when present, its committed story from the default branch. It does not supply source code or import details.",
+      "figure": "branches"
+    },
+    {
+      "id": "scan-api",
+      "name": "The local scan entrance",
+      "role": "door",
+      "blurb": "Gives the desktop, command line and sharing server the same way to ask for a local scan.",
+      "modules": [
+        "src-tauri/src/lib.rs"
+      ],
+      "figure": "plug"
+    },
+    {
+      "id": "share-server",
+      "name": "The computer’s sharing door",
+      "role": "door",
+      "blurb": "The desktop Share session or atlas serve checks the pairing code and limits requests to shared folders.",
+      "modules": [
+        "src-tauri/src/companion.rs"
+      ],
+      "figure": "padlock"
+    },
+    {
+      "id": "github-reader",
+      "name": "The browser’s GitHub reader",
+      "role": "core",
+      "blurb": "Checks the repository URL, fetches its file list and optional story, and asks the browser’s story checker to validate the references.",
       "modules": [
         "src/github.ts",
         "src/github-url.ts"
       ],
       "figure": "branches"
+    },
+    {
+      "id": "story-authoring",
+      "name": "The story-writing guide",
+      "role": "core",
+      "blurb": "Builds atlas story brief from rules and scan facts. atlas story check reports warnings and coverage; shared rules decide which files count as product code.",
+      "modules": [
+        "src-tauri/src/story_authoring.rs",
+        "src-tauri/src/source_scope.rs",
+        "src/sourceScope.ts",
+        "docs/writing-a-story.md"
+      ],
+      "figure": "query"
     }
   ],
   "flows": [
     {
       "from": "reader",
       "to": "desktop",
-      "carries": "a folder to look at",
-      "returns": "a journey to follow, files to explore, and a part to look inside"
+      "carries": "The person chooses a local folder to explore.",
+      "returns": "The desktop receives a scan to show in the three screens."
     },
     {
       "from": "agent",
       "to": "cli",
-      "carries": "the name of a folder",
-      "returns": "the whole description as JSON"
+      "carries": "The agent asks to scan a folder, prepare a story brief, or check the story.",
+      "returns": "The command prints scan JSON, an authoring brief, or warnings and coverage."
     },
     {
       "from": "reader",
       "to": "companion",
-      "carries": "which of a computer's shared folders to open",
-      "returns": "the same description, shown on the iPad"
+      "carries": "The person supplies the computer’s address and pairing code, then chooses a shared folder.",
+      "returns": "The companion receives that folder’s description for the three screens."
     },
     {
       "from": "companion",
-      "to": "desktop",
-      "carries": "a request over Wi-Fi, with the pairing code",
-      "returns": "the description the computer made"
+      "to": "share-server",
+      "carries": "The companion requests a shared folder’s scan with its pairing code.",
+      "returns": "The computer sends the description or explains why access failed."
+    },
+    {
+      "from": "share-server",
+      "to": "scan-api",
+      "carries": "The sharing server passes an allowed folder to the local scan entrance.",
+      "returns": "The scan entrance returns the computer’s description of that folder."
     },
     {
       "from": "desktop",
-      "to": "reader-engine",
-      "carries": "read this folder",
-      "returns": "every file that matters, and how big it is"
+      "to": "scan-api",
+      "carries": "The desktop asks for a scan of the selected folder.",
+      "returns": "The scan entrance returns the folder’s description and warnings."
     },
     {
       "from": "cli",
+      "to": "scan-api",
+      "carries": "The scan command passes the requested folder to the local scan entrance.",
+      "returns": "The scan entrance returns a description ready to print as JSON."
+    },
+    {
+      "from": "scan-api",
       "to": "reader-engine",
-      "carries": "read this folder",
-      "returns": "the same description the app would draw"
+      "carries": "The local scan entrance asks the folder reader to read this repository.",
+      "returns": "The folder reader returns file facts, code facts, the checked story and warnings."
     },
     {
       "from": "reader-engine",
       "to": "folder",
-      "carries": "which files are here, and how large?",
-      "returns": "names, sizes, and text to count"
+      "carries": "The folder reader asks which files are present and reads bounded text where needed.",
+      "returns": "The folder supplies paths, sizes and text for counting and parsing."
     },
     {
       "from": "reader-engine",
       "to": "parser",
-      "carries": "each file worth reading properly",
-      "returns": "what it declares, and which files it uses"
+      "carries": "The folder reader passes supported source files to the code parser.",
+      "returns": "The parser returns declared names and resolved imports where available."
     },
     {
       "from": "reader-engine",
       "to": "storykeeper",
-      "carries": "the story, and everything just found in the folder",
-      "returns": "the parts of the story that are still true, and complaints about the rest"
+      "carries": "The folder reader asks for the repository’s story to be checked against the scanned files.",
+      "returns": "The checker returns usable story references and warnings about invalid ones."
     },
     {
       "from": "storykeeper",
       "to": "written-story",
-      "carries": "is there a story here?",
-      "returns": "the parts, what travels between them, and the journeys"
+      "carries": "The local checker reads the story file beside the repository.",
+      "returns": "The file supplies the written parts, exchanges and journeys."
     },
     {
       "from": "reader-engine",
       "to": "graph",
-      "carries": "everything learned, assembled into one description",
-      "returns": "the finished description, ready to hand to anything that asks"
-    },
-    {
-      "from": "github",
-      "to": "graph",
-      "carries": "a public repository's file list, with no file contents"
+      "carries": "The folder reader assembles the scan facts and checked story into one description.",
+      "returns": "The completed description is available to the caller that requested the scan."
     },
     {
       "from": "graph",
       "to": "views",
-      "carries": "the parts, how they contain each other, and what uses what",
-      "returns": "whatever the reader clicked on"
+      "carries": "The description supplies file facts, the checked story and warnings to the three screens."
+    },
+    {
+      "from": "desktop",
+      "to": "views",
+      "carries": "The desktop passes the local description to the three screens."
+    },
+    {
+      "from": "companion",
+      "to": "views",
+      "carries": "The companion passes the computer’s description to the three screens."
+    },
+    {
+      "from": "reader",
+      "to": "views",
+      "carries": "The person opens a public repository’s URL or explores the selected description.",
+      "returns": "The screens show the available story and facts, explaining any missing details."
     },
     {
       "from": "views",
-      "to": "reader",
-      "carries": "a story to follow, its territory in the files, and the names inside each part"
+      "to": "github-reader",
+      "carries": "The screens ask the browser’s reader to load the public repository URL.",
+      "returns": "The reader returns the file list, checked story when available, and warnings."
+    },
+    {
+      "from": "github-reader",
+      "to": "github",
+      "carries": "The browser requests repository details, the file tree and the optional committed story.",
+      "returns": "GitHub returns the default branch’s file list and story, without source code or imports."
+    },
+    {
+      "from": "github-reader",
+      "to": "storykeeper",
+      "carries": "The browser passes the fetched story and file paths to its story checker.",
+      "returns": "The checker returns usable story references and warnings about invalid ones."
+    },
+    {
+      "from": "github-reader",
+      "to": "graph",
+      "carries": "The browser assembles the public file list and checked story into the shared description."
+    },
+    {
+      "from": "cli",
+      "to": "story-authoring",
+      "carries": "The command runs atlas story brief or atlas story check for the chosen repository.",
+      "returns": "The guide returns rules, scan facts and the existing story, or validation warnings and product-source coverage."
+    },
+    {
+      "from": "story-authoring",
+      "to": "scan-api",
+      "carries": "The guide requests a fresh repository scan before preparing its brief or check report.",
+      "returns": "The scan entrance returns file facts, the checked story and warnings."
+    },
+    {
+      "from": "story-authoring",
+      "to": "written-story",
+      "carries": "The brief reads the original story file so the agent can inspect and repair it.",
+      "returns": "The file returns the existing prose, including references that validation rejected."
+    },
+    {
+      "from": "agent",
+      "to": "written-story",
+      "carries": "The coding agent writes or revises the story file using the brief and its understanding of the code.",
+      "returns": "The saved story is ready for atlas story check to read."
     }
   ],
   "journeys": [
     {
       "name": "Someone opens a folder on their laptop",
-      "blurb": "The ordinary path. Nothing leaves the machine.",
+      "blurb": "The local reader gathers code facts and checks the story before the screens show them. Nothing leaves the machine.",
       "steps": [
         "reader",
         "desktop",
+        "scan-api",
         "reader-engine",
         "folder",
         "reader-engine",
         "parser",
+        "reader-engine",
+        "storykeeper",
+        "written-story",
+        "storykeeper",
         "reader-engine",
         "graph",
         "views",
@@ -252,40 +361,83 @@
       ]
     },
     {
-      "name": "The story gets checked against the code",
-      "blurb": "Why a story that has drifted still shows the part that is true.",
+      "name": "Someone opens a public repository on the web",
+      "blurb": "GitHub supplies a file list and an optional committed story. The browser checks the story; source code, imports and line counts are unavailable.",
       "steps": [
+        "reader",
+        "views",
+        "github-reader",
+        "github",
+        "github-reader",
+        "storykeeper",
+        "github-reader",
+        "graph",
+        "views",
+        "reader"
+      ]
+    },
+    {
+      "name": "An agent writes the story",
+      "blurb": "The agent reads atlas story brief, writes the file itself, then runs atlas story check for fresh validation and coverage. Atlas calls no model.",
+      "steps": [
+        "agent",
+        "cli",
+        "story-authoring",
+        "scan-api",
+        "reader-engine",
+        "graph",
+        "reader-engine",
+        "scan-api",
+        "story-authoring",
+        "written-story",
+        "story-authoring",
+        "cli",
+        "agent",
+        "written-story",
+        "agent",
+        "cli",
+        "story-authoring",
+        "scan-api",
         "reader-engine",
         "storykeeper",
         "written-story",
         "storykeeper",
         "reader-engine",
-        "graph",
-        "views"
-      ]
-    },
-    {
-      "name": "An agent reads the codebase instead of looking at it",
-      "blurb": "The same description, with no screen involved.",
-      "steps": [
-        "agent",
-        "cli",
-        "reader-engine",
-        "graph",
-        "reader-engine",
+        "scan-api",
+        "story-authoring",
         "cli",
         "agent"
       ]
     },
     {
-      "name": "An iPad borrows a computer's eyes",
-      "blurb": "The tablet never holds the code — the computer reads and sends the result.",
+      "name": "An agent reads the codebase instead of looking at it",
+      "blurb": "atlas scan returns the same local description as JSON, with no screen involved.",
+      "steps": [
+        "agent",
+        "cli",
+        "scan-api",
+        "reader-engine",
+        "graph",
+        "reader-engine",
+        "scan-api",
+        "cli",
+        "agent"
+      ]
+    },
+    {
+      "name": "An iPad borrows a computer’s eyes",
+      "blurb": "The pairing code opens access only to shared folders. The computer sends a scan; the tablet shows it without copying the repository.",
       "steps": [
         "reader",
         "companion",
-        "desktop",
+        "share-server",
+        "scan-api",
         "reader-engine",
         "graph",
+        "reader-engine",
+        "scan-api",
+        "share-server",
+        "companion",
         "views",
         "reader"
       ]
