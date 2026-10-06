@@ -43,7 +43,7 @@ flowchart LR
 - **Symbol index:** every parsed file carries the declarations it makes — functions, types and constants, each with its line and whether it is exported. Language-specific forms normalize to those three kinds, because finer distinctions do not survive a legend, and a Rust `impl` block contributes its methods as `Type::method` so a type's real surface is visible. Search and *Inside a part* both depend on this index: it makes search find code rather than filenames and gives a part its contents at the grain a reader asks about.
 - **Crossing names:** edges record the bindings taken from each imported module. Aliases retain their source name, namespace/glob imports record `*`, and side-effect/dynamic imports carry no named bindings. The UI groups real edges at part boundaries; dependency direction is distinct from written data-flow direction.
 - **Written story, scanned facts:** people, external systems and narrative exchanges cannot be inferred from imports. A hand-written `.codebase-index/_story.json` supplies actors, flows and journeys. Both validators drop invalid references and report warnings. The UI labels written, scanned and import-derived information separately.
-- **Transit layout:** roles form columns in person → surface → door → core → store → external order. Empty columns collapse. Routes are metro lines: deterministic polylines of horizontal/vertical and 45° segments (same-column routes included) that steer around station labels where feasible; the layout also chooses each label's anchor (below, above or right) and wraps names to at most three lines. A route travelled against its flow is drawn reversed. A flow carries a sentence and may return another; a reverse journey hop uses its return text and falls back to the carried text when no return is written. A base network in the non-text `--graphic` tone (≥3:1 against the background), ink visited routes, dashed upcoming routes and a moving packet make progress visible. Reduced motion stops packet and dash animation and makes following scroll immediate.
+- **Journey sequence by default:** How it works follows one journey, so one column per first-visited part and one row per hop make the order explicit. Repeated visits remain separate rows; dashed arrows carry return sentences. Hairline figures mark parts and a small dot marks people. Long sentences grow their rows; sticky headers and an internally scrolling card keep long journeys readable, with a vertical exchange list on phones. Visited hops use ink, upcoming hops use `--graphic`, and the current 2px arrow carries a moving packet. Reduced motion stops packet animation and makes following scroll immediate. The stepper, part cards and scanned details share the selected step.
 - **Flat territory:** a squarified treemap groups files by top-level area into tiles. Source/docs weight is full lines, config/data quarter weight, and binary assets contribute bounded presence. GitHub uses bytes as an estimate. Selected product files fill ink, other parts take the `--graphic` tone, uncovered files hatch, and tests/setup draw as outlined, transparent tiles. The legend lists only parts that own product files, then **Not in the story**; people and outside systems without files never produce empty 0% rows. A journey trace is a toggle button, not a checkbox; it marks each part's largest file and gives repeated visits to one part distinct, numbered stops. Small tiles remain available through full-size file-list controls. Area labels are derived, not written: an area reads as a part's name when that part owns at least 60% of its product lines, otherwise as "Several parts", "Tests", "Setup" or "Not in the story".
 - **Honest coverage:** percentages use product-source lines, mirroring `source_scope.rs` in `sourceScope.ts`: tests/support, config, hidden tooling, vendored and generated trees are excluded, while stylesheets and markup (CSS, SCSS, HTML) count as source. `sourceScope.isTestPath` is the one TypeScript test rule (`model.ts`'s `isTestNode` delegates to it), and `tests/source-scope-table.json` is a path table that the TypeScript suite and a Rust unit test both assert, so the two sides cannot drift silently. The CLI needs only a covered total, so it takes the union of actor modules; the web needs a part per file, so ownership is exclusive — the most specific module wins and the earlier actor wins ties. Every file counts once either way, so the covered total is the same. GitHub shows file counts because lines/imports are unavailable; truncated scans are marked partial and gap suggestions are caveated. [The scope contract](docs/writing-a-story.md#product-source-scope-and-checks) records the precise exclusions.
 - **Conservative gap hints:** walk uncovered product importers upstream, ignoring tests; an import of a directory stands for the files inside it. Suggest files only when all reached owning boundaries belong to one part and no unowned entry root exists. Cycles terminate; shared utilities and orphan cycles remain unassigned. Hints are facts to review, not automatic story edits.
@@ -56,7 +56,7 @@ flowchart TD
   Tokens[ui/tokens.css] --> Shell[Atlas.css + App.css]
   Tokens --> Figures[Hairline React figures]
   Graph[RepositoryGraph] --> Facts[storyFacts + sourceScope]
-  Facts --> Transit[transitLayout + journey]
+  Facts --> Transit[sequenceLayout + journey]
   Facts --> Coverage[territory + treemap]
   Facts --> Declarations[partDeclarations]
   Transit --> Journey[JourneyView]
@@ -108,7 +108,7 @@ let json = codebase_atlas_lib::scan_json(std::path::Path::new("."), false)?;
 ## Interaction
 
 - The **Source** menu retains **Scan directory** and **Share** on desktop, **Computer** for companion connections, **GitHub URL**, and **Open/Save map**. Share exposes pairing QR/code and reachable addresses. **Share folder** adds a root; scanned folders are shared automatically. Computer accepts a host/code or pairing QR. iOS Camera can open a paired deep link.
-- **How it works** opens first. Pick a written journey, use Prev/Play/Next or its ticks, and follow the carries/returns headline. Select a station, connection or part card to inspect its exchanges, files and crossings. **Look inside** opens the selected part.
+- **How it works** opens first as a journey sequence. Pick a written journey, use Prev/Play/Next or its ticks, and follow the carries/returns headline. Select a hop or participant header, or a part card, to inspect its exchanges, files and crossings. Dashed arrows are answers coming back. The sequence scrolls inside its card, with a vertical exchange list on phones. **Look inside** opens the selected part.
 - **Where it lives** highlights the selected part in a file treemap. The legend's whole-number percentages count product source for each part that owns files, then **Not in the story**, which selects the gap and its suggestions. Choose another part, press the trace toggle to follow a written journey across each part’s largest file, select a tile, or browse every file. People and outside systems without files are named outside the trace.
 - **Inside a part** shows written Arrives/Leaves beside scanned files, declarations, crossings and importing tests. Choose a part from the part list (a disclosure, so long names wrap instead of truncating) or from its exchange and crossing links; a part without files shows only its written exchanges. Expand file rows to see their names and line numbers. File links take the selection to Where it lives.
 - A missing story explains `atlas story brief` and `atlas story check`; Where it lives still shows the files. GitHub maps explicitly explain the lack of imports, declarations and line counts. Warnings remain visible.
@@ -167,7 +167,7 @@ src/
   main.tsx                React entry; imports the self-hosted fonts
   App.tsx                 source lifecycle, dialogs, theme and screen navigation
   AtlasWorkspace.tsx      sidebar, search and shared part/journey state
-  JourneyView.tsx         transit map, playback, figures and exchanges
+  JourneyView.tsx         journey playback, sequence, figures and exchanges
   TerritoryView.tsx       flat file map, journey trace and gap hints
   PartView.tsx            declarations, files, crossings and importing tests
   PartDetails.tsx         shared scanned file/crossing and written exchange lists
@@ -175,7 +175,9 @@ src/
   sourceScope.ts          TS mirror of Rust product-source scope and isTestPath
   territory.ts            coverage, conservative gap derivation and map layout
   treemap.ts              weighted-volume and squarified packing utilities
-  transitLayout.ts        role columns, stations, label anchors and metro routes
+  SequenceView.tsx         sticky participant columns, exchange rows and phone list
+  sequenceLayout.ts       first-visit columns and rows sized to full sentences
+  transitLayout.ts        legacy whole-network layout helper
   journey.ts              journey hops, flow keys and label wrapping
   partDeclarations.ts     exported-first declaration ordering
   storyFigures.ts         figure catalogue and role defaults

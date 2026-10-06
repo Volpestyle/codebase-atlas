@@ -211,3 +211,38 @@ html:has(.atlas-shell), html:has(.atlas-shell) body, html:has(.atlas-shell) #roo
 .atlas-warnings li { overflow-wrap:anywhere; }
 .atlas-gap-details > .atlas-gap { margin-top:0; border-top:0; padding-top:0; }
 .atlas-gap-details > .atlas-gap > h2 { margin-top:4px; }
+
+/* Journey sequences preserve first-visit columns and every repeated exchange. */
+.sequence-scroll { max-height:640px; overflow:auto; position:relative; }
+.sequence-field { position:relative; margin:0 auto; }
+.sequence-field > svg { position:absolute; inset:0; }
+.sequence-heads { position:sticky; top:0; z-index:3; background:var(--card); border-bottom:1px solid var(--line); box-sizing:border-box; }
+.atlas-content .sequence-part { position:absolute; top:16px; display:flex; flex-direction:column; align-items:center; gap:6px; padding:0 8px 10px; font-size:12px; line-height:16px; color:var(--muted); border-radius:8px; }
+.sequence-part > .part-figure-box { width:52px; height:42px; padding:0; }
+.sequence-part > span:last-child > span { display:block; }
+.sequence-part.is-current { color:var(--ink); font-weight:500; }
+.sequence-part.is-selected { background:var(--pill); }
+.sequence-person { height:42px; width:52px; display:grid; place-items:center; }
+.sequence-person > span { width:9px; height:9px; border:1px solid var(--graphic); border-radius:50%; }
+.sequence-lifeline { stroke:var(--line); stroke-width:1; stroke-dasharray:2 4; }
+.sequence-arrow { fill:none; stroke:var(--graphic); stroke-width:1; }
+.sequence-arrow.is-visited { stroke:var(--ink); stroke-width:1.2; }
+.sequence-arrow.is-current { stroke-width:2; }
+.sequence-arrow.is-return { stroke-dasharray:4 4; }
+.atlas-content .sequence-label { position:absolute; display:flex; gap:10px; align-items:baseline; padding:3px 6px; border-radius:5px; text-align:left; background:var(--card); color:var(--muted); font-size:13px; line-height:19px; min-height:44px; box-sizing:border-box; }
+.sequence-label > span:last-child > span { display:block; }
+.sequence-label > .atlas-mono { flex-shrink:0; white-space:nowrap; }
+.sequence-label.is-visited { color:var(--body); }
+.sequence-label.is-current { color:var(--ink); font-weight:500; }
+.sequence-list { display:none; }
+@media(max-width:600px) {
+  .sequence-scroll { display:none; }
+  .sequence-list { display:block; list-style:none; padding:12px; margin:0; max-height:560px; overflow:auto; position:relative; }
+  .sequence-list li + li { border-top:1px solid var(--line); }
+  .sequence-list button { display:flex; width:100%; gap:12px; padding:16px 10px; text-align:left; border-radius:8px; color:var(--muted); }
+  .sequence-list button > .atlas-mono { flex-shrink:0; }
+  .sequence-list button.is-current { background:var(--pill); color:var(--ink); }
+  .sequence-list button.is-visited { color:var(--body); }
+  .sequence-pair { display:block; font-size:12px; line-height:1.5; }
+  .sequence-sentence { display:block; margin-top:6px; font-size:13px; line-height:1.5; }
+}
