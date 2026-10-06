@@ -26,7 +26,7 @@ export default function TerritoryView({ graph, actor, journeyIndex, onSelectActo
   const layout = useMemo(() => buildTerritoryLayout(graph, width, Math.max(430, width * .6)), [graph, width]);
   const journey = graph.story?.journeys[journeyIndex];
   const route = journey && territoryJourney(journey, layout.cells);
-  const selected = graph.nodes.find(node => node.id === selectedId);
+  const selected = graph.nodes.find(node => node.id === selectedId && node.kind !== "repository" && node.kind !== "directory");
   return <>
     <h1>Where it <em>lives</em>.</h1><p className="atlas-intro">Files read from the code. Parts written by hand. Select a part to see its territory.</p>
     <div className="atlas-card" ref={container}>

@@ -130,3 +130,19 @@ html:has(.atlas-shell), html:has(.atlas-shell) body, html:has(.atlas-shell) #roo
 .atlas-browse summary, .atlas-gap summary { min-height:44px; cursor:pointer; padding:8px 0; }
 .atlas-gap small { display:block; margin-top:8px; }
 @media(max-width:800px) { .atlas-legend { width:100%; display:flex; overflow:auto; margin:0; gap:6px; } .atlas-legend > p { display:none; } .atlas-legend button { width:auto; flex:0 0 180px; } }
+.atlas-inside { display:grid; grid-template-columns:minmax(0,1fr) 280px; gap:40px; }
+.inside-facts { min-width:0; }
+.inside-facts section { margin-top:24px; }
+.inside-facts small { display:block; }
+.declaration-files details { border-bottom:1px solid var(--line); }
+.declaration-files summary { display:flex; gap:12px; align-items:center; justify-content:space-between; cursor:pointer; padding:12px 16px; min-height:56px; }
+.declaration-files summary > span:last-child { flex-shrink:0; font-size:12px; }
+.declaration-files ol { list-style:none; padding:0 16px; margin:0; }
+.declaration-files li { padding:12px 0; display:flex; gap:12px; flex-wrap:wrap; align-items:baseline; justify-content:space-between; border-top:1px solid var(--line); font-size:12px; }
+.inside-exchanges { margin-top:16px; }
+.atlas-part-picker { display:flex; flex-direction:column; gap:8px; color:var(--muted); margin:16px 0; }
+.atlas-part-picker select { font:inherit; color:var(--ink); background:var(--pill); border:0; border-radius:8px; padding:8px; min-height:44px; max-width:100%; }
+.atlas-legend button > span:last-child { white-space:nowrap; flex-shrink:0; }
+@media(max-width:1100px) { .atlas-inside { grid-template-columns:minmax(0,1fr); } .inside-facts { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:24px; } .inside-facts section { margin:0; } }
+@media(max-width:800px) { .inside-exchanges { width:100%; } .inside-exchanges .atlas-exchanges { display:flex; gap:24px; overflow:auto; } .inside-exchanges .atlas-exchanges li { min-width:200px; } }
+@media(max-width:600px) { .inside-facts { grid-template-columns:minmax(0,1fr); } }

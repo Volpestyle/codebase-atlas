@@ -3,7 +3,7 @@ import { actorExchanges, filesForActor, partCrossings, type ProseExchange } from
 
 export function FileList({ graph, files, onOpenFile }: { graph: RepositoryGraph; files: RepositoryNode[]; onOpenFile: (id: string) => void }) {
   return files.length ? <ul className="atlas-files">{files.map(file => <li key={file.id}>
-    <button onClick={() => onOpenFile(file.id)} title={`Open ${file.path} on the code map`}><span>{file.path}</span><span>{graph.stats.lineCountAvailable ? `${file.lines.toLocaleString()} lines` : formatBytes(file.sizeBytes)}</span></button>
+    <button onClick={() => onOpenFile(file.id)} title={`Open ${file.path} in Where it lives`}><span>{file.path}</span><span>{graph.stats.lineCountAvailable ? `${file.lines.toLocaleString()} lines` : formatBytes(file.sizeBytes)}</span></button>
   </li>)}</ul> : <p className="atlas-muted">No files in this repository. This part is a person or an outside system.</p>;
 }
 
