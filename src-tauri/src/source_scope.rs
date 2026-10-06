@@ -88,4 +88,28 @@ mod tests {
         assert!(is_config_source("vite.config.ts"));
         assert!(!is_config_source("src/config.ts"));
     }
+
+    /// tests/source-scope-table.json is shared with tests/source-scope.test.ts:
+    /// each row is [path, is product source] for a source file, so the web
+    /// mirror in src/sourceScope.ts cannot drift from this rule unnoticed.
+    #[test]
+    fn product_scope_matches_the_shared_path_table() {
+        let table: Vec<(String, bool)> =
+            serde_json::from_str(include_str!("../../tests/source-scope-table.json")).unwrap();
+        assert!(!table.is_empty());
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.ts"), "export const a = 1;\n").unwrap();
+        let graph = crate::scanner::scan_repository_path(root.path()).unwrap();
+        let template = graph
+            .nodes
+            .iter()
+            .find(|node| node.kind == NodeKind::Source)
+            .expect("a scanned source file")
+            .clone();
+        for (path, product) in table {
+            let mut node = template.clone();
+            node.id.clone_from(&path);
+            assert_eq!(is_product_source(&node), product, "{path}");
+        }
+    }
 }

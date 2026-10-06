@@ -2,9 +2,9 @@
 //!
 //! One parse per source file yields both halves of the fact layer: the
 //! declarations a file defines, and the specifiers it imports together with the
-//! named bindings that cross each import. Bindings are what make an arc on the
-//! map say something — `App.tsx` does not merely import `model.ts`, it takes
-//! `RepositoryGraph` and `layerForNode` from it.
+//! named bindings that cross each import. Bindings are the crossing names shown
+//! at part boundaries and in Inside a part — `App.tsx` does not merely import
+//! `model.ts`, it takes `RepositoryGraph` and `layerForNode` from it.
 //!
 //! This is a parser, not a compiler. It reads what a file says at its top level
 //! and does not follow re-exports, resolve types, or track which imported names

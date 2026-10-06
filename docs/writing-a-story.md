@@ -28,7 +28,7 @@ The Atlas workspace reads `.codebase-index/_story.json` from a local scan or, on
 - `role` is also the column, in the order `person`, `surface`, `door`, `core`, `store`, `external`. There are no coordinates: name the role honestly and the layout follows.
 - `modules` are paths as the scan sees them. An actor is a role, not a directory — several modules can serve one, and people and outside services have none.
 - `carries` and `returns` are sentences, not type names. One arrow carries both directions.
-- `steps` are actor ids. Consecutive pairs need a flow in one direction or the other; a step taken against a flow reads as its `returns`.
+- `steps` are actor ids. Consecutive pairs need a flow in one direction or the other; a step taken against a flow reads as its `returns`, or its `carries` when no `returns` is written.
 - Everything is checked against the scanned tree. Unknown ids and stale paths are dropped and reported as scan warnings rather than failing the scan, so the story keeps rendering the part that is still true.
 - Missing stories produce no warning. Files over 256 KiB, malformed JSON, invalid field types, or unknown roles are rejected with a warning; the rest of the map still loads.
 - `.codebase-index/` itself is not scanned, so a story cannot list itself as one of an actor's modules.
@@ -39,14 +39,14 @@ Author with `atlas story brief [REPOSITORY]`; validate and inspect product-sourc
 
 ## Product-source scope and checks
 
-Coverage and the brief’s code-module digest use the same rule, implemented in `src-tauri/src/source_scope.rs` for straightforward mirroring in the web territory screen:
+Coverage and the brief’s code-module digest use the same rule, implemented in `src-tauri/src/source_scope.rs`. The web territory screen mirrors it in `src/sourceScope.ts`: `isProductSource` for the whole rule and `isTestPath` for the test layer, which `isTestNode` in `src/model.ts` delegates to. `tests/source-scope-table.json` lists paths with the expected answer; the TypeScript suite and a Rust unit test in `source_scope.rs` both assert it, so a change to either side must update the table.
 
-- Count only source files. Exclude configuration nodes, `*.config.*` files, lockfiles, documentation, and assets.
+- Count only source files. Stylesheets and markup (CSS, SCSS, Sass, Less, HTML) are source and count. Exclude configuration nodes, `*.config.*` files, lockfiles, documentation, and assets.
 - Exclude files inside any dot-directory (`.claude/`, `.github/`, `.vscode/`, and other directory segments starting with `.`). A dot-prefixed filename alone is not a directory exclusion.
 - Exclude generated directory segments from the scanner’s shared list: `.git`, `.codebase-index`, `node_modules`, `target`, `dist`, `build`, `.next`, `.turbo`, `coverage`, `vendor`, `Pods`, `DerivedData`. Also exclude any `gen/` directory below `src-tauri/`.
-- Exclude the existing test layer: `*.test.*`, `*.spec.*`, `*_test.*`, and files beneath `test`, `tests`, `__tests__`, `spec`, `specs`, `e2e`, `fixtures`, or `__mocks__` (support-directory matching ignores case).
+- Exclude the existing test layer: a file whose stem — the name before its last dot, or the whole name when it has none — ends in `.test`, `.spec` or `_test` (so `a.test.ts` and an extensionless `run_test` are tests, `a.test` is not), and any path with a segment named `test`, `tests`, `__tests__`, `spec`, `specs`, `e2e`, `fixtures`, or `__mocks__` (segment matching ignores case; stem suffixes do not).
 
-Actor modules cover their source files and descendants; overlapping actor modules count each file once. Coverage uses counted lines from the fresh scan and is informational. `atlas story check` exits 1 only for story validation warnings or no usable story. Other scan warnings, including truncation, skipped entries, and stale summaries, are printed as information and do not invalidate a story. A partial scan or unavailable line counts still limit what coverage can say.
+Actor modules cover their source files and descendants; overlapping actor modules count each file once. The CLI takes the union of actor modules; the web assigns each file to one part — the most specific module wins and the earlier actor wins ties — so both report the same covered total. Coverage uses counted lines from the fresh scan, lists at most 150 uncovered files largest first, and is informational. `atlas story check` exits 1 only for story validation warnings, no usable story, or a scan failure such as a missing folder. Other scan warnings, including truncation, skipped entries, and stale summaries, are printed as information and do not invalidate a story. A partial scan or unavailable line counts still limit what coverage can say.
 
 The brief partitions code files into at most 150 modules at the deepest level that fits, collapses single-child directory chains, and lists each module once without ancestor totals. Docs/config contribute one short line count, with the same hidden/generated exclusions. Import edges to directory targets are included when that directory resolves to one listed module; ambiguous or excluded targets are counted as omissions.
 

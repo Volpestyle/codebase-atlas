@@ -12,7 +12,7 @@
       "id": "agent",
       "name": "An AI agent",
       "role": "person",
-      "blurb": "Reads the same map as JSON instead of looking at it, to answer questions about the code."
+      "blurb": "Reads the same description as JSON instead of looking at it, to answer questions about the code."
     },
     {
       "id": "desktop",
@@ -29,7 +29,7 @@
       "id": "cli",
       "name": "The command line",
       "role": "surface",
-      "blurb": "Prints the whole map as JSON, so scripts and agents can read a codebase without a screen.",
+      "blurb": "Prints the whole description as JSON, so scripts and agents can read a codebase without a screen.",
       "modules": [
         "src-tauri/src/cli.rs",
         "src-tauri/src/bin/atlas.rs"
@@ -44,7 +44,8 @@
       "modules": [
         "src-tauri/src/companion.rs",
         "src/companion.ts",
-        "src/PairingScanner.tsx"
+        "src/PairingScanner.tsx",
+        "src/pairingQr.ts"
       ],
       "figure": "phone"
     },
@@ -101,7 +102,11 @@
       "role": "core",
       "blurb": "Follow the data, find its territory in the files, then inspect a part’s declarations and imports.",
       "modules": [
+        "src/main.tsx",
         "src/App.tsx",
+        "src/App.css",
+        "src/Atlas.css",
+        "src/ui/tokens.css",
         "src/AtlasWorkspace.tsx",
         "src/JourneyView.tsx",
         "src/TerritoryView.tsx",
@@ -162,13 +167,13 @@
       "from": "reader",
       "to": "companion",
       "carries": "which of a computer's shared folders to open",
-      "returns": "the same map, drawn on the iPad"
+      "returns": "the same description, shown on the iPad"
     },
     {
       "from": "companion",
       "to": "desktop",
       "carries": "a request over Wi-Fi, with the pairing code",
-      "returns": "the map the computer drew"
+      "returns": "the description the computer made"
     },
     {
       "from": "desktop",
