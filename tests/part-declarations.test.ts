@@ -14,3 +14,11 @@ test("declarations preserve files, sort exports first by line, and do not mutate
   assert.deepEqual(rows[1].declarations.map(symbol => symbol.name), ["early", "late", "privateEarly"]);
   assert.equal(file.symbols[0].name, "privateEarly"); assert.deepEqual(rows[0].declarations, []);
 });
+
+test("declarations are empty for unknown parts, parts without files, and graphs without a story; tests are left out", () => {
+  const fixture = graph([{ ...node("src/app/a.test.ts"), symbols: [{ name: "spec", kind: "function" as const, line: 1, exported: false }] }, node("src/app/a.ts")]);
+  assert.deepEqual(partDeclarations(fixture, "app").map(row => row.path), ["src/app/a.ts"]);
+  assert.deepEqual(partDeclarations(fixture, "nobody"), []);
+  assert.deepEqual(partDeclarations(fixture, "user"), []);
+  assert.deepEqual(partDeclarations({ ...fixture, story: undefined }, "app"), []);
+});

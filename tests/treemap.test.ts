@@ -21,3 +21,24 @@ test("squarified cells partition their rectangle without overlap", () => {
     assert.ok(overlapX<.001 || overlapY<.001);
   }
 });
+
+test("treemap edge cases stay finite and inside the rectangle", () => {
+  assert.deepEqual([...packTreemap([{ id: "only", area: 1200 }], 40, 30).values()], [{ x: 0, y: 0, width: 40, height: 30 }]);
+  assert.equal(packTreemap([{ id: "a", area: 1 }], 0, 30).size, 0);
+  assert.equal(packTreemap([], 10, 10).size, 0);
+  for (const [width, height, items] of [
+    [100, 100, [{ id: "a", area: 10000 }, { id: "zero", area: 0 }, { id: "nan", area: Number.NaN }]],
+    [100, 100, [{ id: "a", area: 0 }, { id: "b", area: 0 }]],
+    [1000, 1, [{ id: "a", area: 999 }, { id: "b", area: 1 }]],
+    [1, 1000, [{ id: "a", area: 1 }, { id: "b", area: 999 }]],
+    [300, 200, Array.from({ length: 60 }, (_, i) => ({ id: String(i), area: i === 0 ? 50000 : 10000 / 59 }))],
+  ] as const) {
+    const cells = packTreemap([...items], width, height);
+    assert.equal(cells.size, items.length);
+    for (const [id, cell] of cells) {
+      for (const value of Object.values(cell)) assert.ok(Number.isFinite(value), id);
+      assert.ok(cell.width >= 0 && cell.height >= 0, id);
+      assert.ok(cell.x >= -.001 && cell.y >= -.001 && cell.x + cell.width <= width + .001 && cell.y + cell.height <= height + .001, `${id} ${JSON.stringify(cell)}`);
+    }
+  }
+});

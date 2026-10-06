@@ -2,29 +2,31 @@ import type { StoryFlow, StoryJourney } from "./model.ts";
 
 export const flowKey = (flow: StoryFlow) => `${flow.from}→${flow.to}`;
 
-/** Greedy word wrap to a character budget, longest overflow elided. */
+/** Greedy word wrap to a character budget. A word longer than the budget is
+ *  broken across lines; text beyond `maxLines` ends the last line with "…". */
 export function wrapText(text: string, chars: number, maxLines: number): string[] {
+  const width = Math.max(1, Math.floor(chars));
+  if (maxLines < 1) return [];
   const lines: string[] = [];
   let line = "";
   for (const word of text.split(/\s+/).filter(Boolean)) {
     const candidate = line ? `${line} ${word}` : word;
-    if (candidate.length <= chars) {
+    if (candidate.length <= width) {
       line = candidate;
       continue;
     }
     if (line) lines.push(line);
     line = word;
-    if (lines.length === maxLines) break;
-  }
-  if (line && lines.length < maxLines) lines.push(line);
-  if (lines.length === maxLines) {
-    const last = lines[maxLines - 1];
-    const consumed = lines.join(" ").length;
-    if (consumed < text.length) {
-      lines[maxLines - 1] = `${last.slice(0, Math.max(0, chars - 1))}…`;
+    while (line.length > width) {
+      lines.push(line.slice(0, width));
+      line = line.slice(width);
     }
   }
-  return lines;
+  if (line) lines.push(line);
+  if (lines.length <= maxLines) return lines;
+  const kept = lines.slice(0, maxLines);
+  kept[maxLines - 1] = `${kept[maxLines - 1].slice(0, width - 1).trimEnd()}…`;
+  return kept;
 }
 
 export interface JourneyHop {

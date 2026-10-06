@@ -177,3 +177,47 @@ test("known figures survive and unknown figures warn and use role defaults", () 
     }
   }
 });
+
+test("a non-string figure rejects the whole story, as serde does; a person's unknown figure still warns", () => {
+  for (const figure of [3, true, ["riffle"], { name: "riffle" }]) {
+    const warnings: string[] = [];
+    const body = { ...good(), actors: [{ ...good().actors[1], figure }] };
+    assert.equal(readStory(JSON.stringify(body), new Set(["web"]), warnings), undefined, JSON.stringify(figure));
+    assert.match(warnings[0], /^The story file could not be read: /);
+  }
+  const warnings: string[] = [];
+  const story = readStory(JSON.stringify({ ...good(), actors: [{ ...good().actors[0], figure: "unknown" }], flows: [], journeys: [] }), new Set(), warnings)!;
+  assert.equal(story.actors[0].figure, undefined);
+  assert.deepEqual(warnings, ['Story: actor "user" has unknown figure "unknown"; using the role default.']);
+});
+
+test("GitHub reads a story blob whose tree entry has no size", async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    calls += 1;
+    if (calls === 1) return Response.json({ name: "demo", full_name: "owner/demo", default_branch: "main", html_url: "https://github.com/owner/demo" });
+    if (calls === 2) return Response.json({ tree: [{ path: "web", type: "tree" }, { path: ".codebase-index/_story.json", type: "blob" }], truncated: false });
+    return new Response(JSON.stringify(good()));
+  });
+  const graph = await scanGitHubRepository("https://github.com/owner/demo");
+  assert.equal(calls, 3);
+  assert.equal(graph.story?.summary, "A tiny thing.");
+});
+
+test("GitHub tree 403 explains a rate limit, and reports other refusals by status", async (t) => {
+  for (const remaining of ["0", "12"]) {
+    let calls = 0;
+    const mock = t.mock.method(globalThis, "fetch", async () => {
+      calls += 1;
+      if (calls === 1) return Response.json({ name: "demo", full_name: "owner/demo", default_branch: "main", html_url: "https://github.com/owner/demo" });
+      return new Response("Forbidden", { status: 403, headers: { "x-ratelimit-remaining": remaining, "x-ratelimit-reset": "0" } });
+    });
+    try {
+      await assert.rejects(scanGitHubRepository("https://github.com/owner/demo"),
+        remaining === "0" ? /^Error: GitHub's public API rate limit has been reached\. Try again after / : /^Error: GitHub could not load this repository \(HTTP 403\)\.$/);
+      assert.equal(calls, 2);
+    } finally {
+      mock.mock.restore();
+    }
+  }
+});

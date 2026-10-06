@@ -15,9 +15,11 @@ const figures = {
   drawer: Hairline.Drawer, basket: Hairline.Basket, plot: Hairline.Plot,
 } satisfies Record<FigureName, typeof Hairline.Riffle>;
 
+/** Figures are decoration beside a part's name: hidden from assistive tech
+ *  and out of the tab order (Hairline keeps attributes the host already has). */
 export default function PartFigure({ actor, theme }: { actor: StoryActor; theme: Theme }) {
   const name = actorFigure(actor);
   if (!name) return null;
   const Figure = figures[name];
-  return <Figure className="part-figure" theme={theme} label={`${actor.name}: ${name} figure`} />;
+  return <span className="part-figure-box"><Figure className="part-figure" theme={theme} aria-hidden="true" tabIndex={-1} role="presentation" /></span>;
 }

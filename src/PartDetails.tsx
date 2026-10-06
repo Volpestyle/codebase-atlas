@@ -7,8 +7,9 @@ export function FileList({ graph, files, onOpenFile }: { graph: RepositoryGraph;
   </li>)}</ul> : <p className="atlas-muted">No files in this repository. This part is a person or an outside system.</p>;
 }
 
+/** One line per exchange: what travels, then who it comes from or goes to. */
 export function ExchangeList({ graph, rows, direction, onSelectActor }: { graph: RepositoryGraph; rows: ProseExchange[]; direction: "from" | "to"; onSelectActor: (id: string) => void }) {
-  return rows.length ? <ul className="atlas-exchanges">{rows.map((row, i) => <li key={i}>{row.text}<br /><span className="atlas-muted">{row.returning ? "Back " : ""}{direction} </span><button onClick={() => onSelectActor(row.who)}>{graph.story?.actors.find(actor => actor.id === row.who)?.name ?? row.who}</button></li>)}</ul> : <p className="atlas-muted">No {direction === "from" ? "incoming" : "outgoing"} flow in the story.</p>;
+  return rows.length ? <ul className="atlas-exchanges">{rows.map((row, i) => <li key={i}>{row.text} <span className="atlas-muted">{row.returning ? "back " : ""}{direction} <button onClick={() => onSelectActor(row.who)}>{graph.story?.actors.find(actor => actor.id === row.who)?.name ?? row.who}</button></span></li>)}</ul> : <p className="atlas-muted">{direction === "from" ? "Nothing. Journeys start here." : "Nothing. Journeys end here."}</p>;
 }
 
 export function Crossings({ graph, actor, onSelectActor, onOpenFile }: { graph: RepositoryGraph; actor: StoryActor; onSelectActor: (id: string) => void; onOpenFile: (id: string) => void }) {
@@ -26,12 +27,12 @@ export default function PartDetails({ graph, actor, onSelectActor, onOpenFile, o
   const { takes, gives } = actorExchanges(graph.story!, actor);
   const files = filesForActor(graph, actor.id);
   return <section className="atlas-part-details">
-    <div><span className="atlas-kicker">{ROLE_HEADINGS[actor.role]} · Written story</span><h2>{actor.name}</h2><p className="atlas-muted">{actor.blurb}</p>{onInside && <button className="atlas-text-link" onClick={onInside}>Look inside {actor.name} →</button>}</div>
+    <div><span className="atlas-kicker">{ROLE_HEADINGS[actor.role]} · Written story</span><h2>{actor.name}</h2><p className="atlas-muted">{actor.blurb}</p>{onInside && files.length > 0 && <button className="atlas-text-link" onClick={onInside}>Look inside {actor.name}</button>}</div>
     <dl>
       <div><dt>Takes in <small>Written</small></dt><dd><ExchangeList graph={graph} rows={takes} direction="from" onSelectActor={onSelectActor} /></dd></div>
       <div><dt>Hands on <small>Written</small></dt><dd><ExchangeList graph={graph} rows={gives} direction="to" onSelectActor={onSelectActor} /></dd></div>
       <div><dt>Files <small>Scanned</small></dt><dd><FileList graph={graph} files={files} onOpenFile={onOpenFile} /></dd></div>
-      <div><dt>In the code <small>Scanned</small></dt><dd><Crossings graph={graph} actor={actor} onSelectActor={onSelectActor} onOpenFile={onOpenFile} /></dd></div>
+      {files.length > 0 && <div><dt>In the code <small>Scanned</small></dt><dd><Crossings graph={graph} actor={actor} onSelectActor={onSelectActor} onOpenFile={onOpenFile} /></dd></div>}
     </dl>
   </section>;
 }

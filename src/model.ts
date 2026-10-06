@@ -1,4 +1,5 @@
 import type { FigureName } from "./storyFigures.ts";
+import { isTestPath } from "./sourceScope.ts";
 export type RepositoryNodeKind =
   | "repository"
   | "directory"
@@ -130,25 +131,10 @@ export interface RepositoryGraph {
   warnings: string[];
 }
 
-// Directories that hold a module's support material rather than its substance.
-// Territory mutes these files and product-source coverage excludes them.
-export const SUPPORT_DIR_NAMES = new Set([
-  "test",
-  "tests",
-  "__tests__",
-  "spec",
-  "specs",
-  "e2e",
-  "fixtures",
-  "__mocks__",
-]);
-
-const TEST_FILE_PATTERN = /(\.(test|spec)|_test)\.[^.]+$/;
-
+/** Tests and their support trees. Delegates to the product-source scope so
+ *  the web, the scanner and story checks classify a path the same way. */
 export function isTestNode(node: RepositoryNode): boolean {
-  if (node.kind === "repository") return false;
-  if (TEST_FILE_PATTERN.test(node.name)) return true;
-  return node.path.split("/").some((segment) => SUPPORT_DIR_NAMES.has(segment.toLowerCase()));
+  return node.kind !== "repository" && isTestPath(node.path);
 }
 
 /// Parses an exported map file, rejecting anything that is not a graph.
