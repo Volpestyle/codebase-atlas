@@ -239,3 +239,8 @@ html:has(.atlas-shell), html:has(.atlas-shell) body, html:has(.atlas-shell) #roo
 .network-route.is-current { stroke:var(--ink); stroke-width:2; }
 .atlas-content .network-part { position:absolute; display:flex; flex-direction:column; justify-content:center; align-items:center; gap:0; padding:12px; border:1px solid var(--graphic); border-radius:10px; background:var(--card); color:var(--body); font-size:13px; line-height:18px; }
 .atlas-content .network-part.is-selected { border-color:var(--ink); background:var(--pill); color:var(--ink); }
+.mermaid-copy { display:flex; align-items:center; flex-wrap:wrap; gap:8px; max-width:100%; }
+.mermaid-copy button { min-height:44px; border-radius:8px; padding:0 10px; font-size:12px; }
+.mermaid-copy button:hover { background:var(--pill); }
+.mermaid-copy > span { font-size:12px; }
+.mermaid-copy textarea { width:100%; min-height:140px; font:12px/1.6 var(--font-mono); background:var(--bg); color:var(--ink); border:1px solid var(--line); border-radius:8px; padding:8px; }

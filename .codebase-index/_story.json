@@ -123,7 +123,9 @@
         "src/vite-env.d.ts",
         "src/storyFigures.ts",
         "src/SequenceView.tsx",
-        "src/sequenceLayout.ts"
+        "src/sequenceLayout.ts",
+        "src/MermaidCopy.tsx",
+        "src/mermaid.ts"
       ],
       "figure": "exploded"
     },
@@ -188,7 +190,8 @@
         "src-tauri/src/story_authoring.rs",
         "src-tauri/src/source_scope.rs",
         "src/sourceScope.ts",
-        "docs/writing-a-story.md"
+        "docs/writing-a-story.md",
+        "src-tauri/src/mermaid.rs"
       ],
       "figure": "query"
     }

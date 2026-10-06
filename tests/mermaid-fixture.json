@@ -1,0 +1,52 @@
+{
+  "story": {
+    "summary": "Shared escaping fixture",
+    "actors": [
+      {
+        "id": "../../end",
+        "name": "An owner \"end\" [🌱]",
+        "role": "person",
+        "blurb": "Asks."
+      },
+      {
+        "id": "x;%%",
+        "name": "Console <&> : #",
+        "role": "surface",
+        "blurb": "Shows."
+      },
+      {
+        "id": "b",
+        "name": "The mind",
+        "role": "core",
+        "blurb": "Decides."
+      }
+    ],
+    "flows": [
+      {
+        "from": "../../end",
+        "to": "x;%%",
+        "carries": "A message: \"hello\"; <script> & # %%{init:bad}%%\nend 🌱.",
+        "returns": "A reply [done] | end."
+      },
+      {
+        "from": "x;%%",
+        "to": "b",
+        "carries": "Work with \\ paths & emoji 🌱."
+      }
+    ],
+    "journeys": [
+      {
+        "name": "Ask [end]",
+        "steps": [
+          "../../end",
+          "x;%%",
+          "b",
+          "x;%%",
+          "../../end"
+        ]
+      }
+    ]
+  },
+  "flowchart": "%%{init: {\"theme\":\"base\",\"themeVariables\":{\"fontFamily\":\"Geist, system-ui, sans-serif\",\"fontSize\":\"13px\",\"primaryColor\":\"#ffffff\",\"primaryTextColor\":\"#0a0a0a\",\"primaryBorderColor\":\"#8a8a8a\",\"lineColor\":\"#8a8a8a\",\"secondaryColor\":\"#f4f4f4\",\"tertiaryColor\":\"#ffffff\",\"actorBkg\":\"#ffffff\",\"actorBorder\":\"#8a8a8a\",\"actorTextColor\":\"#0a0a0a\",\"signalColor\":\"#0a0a0a\",\"signalTextColor\":\"#404040\"},\"flowchart\":{\"htmlLabels\":false},\"sequence\":{\"mirrorActors\":false}}}%%\nflowchart LR\n  subgraph role0[\"People\"]\n    direction TB\n    a0[\"An owner #34;#101;nd#34; #91;#127793;#93;\"]\n  end\n  subgraph role1[\"Where they arrive\"]\n    direction TB\n    a1[\"Console #60;#38;#62; #58; #35;\"]\n  end\n  subgraph role3[\"What decides\"]\n    direction TB\n    a2[\"The mind\"]\n  end\n  a0 -->|\"A message#58; #34;hello#34;#59; #60;script#62; #38; #35; #37;#37;#123;init#58;bad#125;#37;#37; #101;nd #127793;.\"| a1\n  a1 -->|\"Work with #92; paths #38; emoji #127793;.\"| a2\n",
+  "sequence": "%%{init: {\"theme\":\"base\",\"themeVariables\":{\"fontFamily\":\"Geist, system-ui, sans-serif\",\"fontSize\":\"13px\",\"primaryColor\":\"#ffffff\",\"primaryTextColor\":\"#0a0a0a\",\"primaryBorderColor\":\"#8a8a8a\",\"lineColor\":\"#8a8a8a\",\"secondaryColor\":\"#f4f4f4\",\"tertiaryColor\":\"#ffffff\",\"actorBkg\":\"#ffffff\",\"actorBorder\":\"#8a8a8a\",\"actorTextColor\":\"#0a0a0a\",\"signalColor\":\"#0a0a0a\",\"signalTextColor\":\"#404040\"},\"flowchart\":{\"htmlLabels\":false},\"sequence\":{\"mirrorActors\":false}}}%%\nsequenceDiagram\n  participant a0 as An owner #34;#101;nd#34; #91;#127793;#93;\n  participant a1 as Console #60;#38;#62; #58; #35;\n  participant a2 as The mind\n  a0->>a1: A message#58; #34;hello#34;#59; #60;script#62; #38; #35; #37;#37;#123;init#58;bad#125;#37;#37; #101;nd #127793;.\n  a1->>a2: Work with #92; paths #38; emoji #127793;.\n  a2-->>a1: Work with #92; paths #38; emoji #127793;.\n  a1-->>a0: A reply #91;done#93; #124; #101;nd.\n"
+}

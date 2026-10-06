@@ -6,6 +6,7 @@ import PartFigure from "./ui/PartFigure";
 import type { Theme } from "./ui/useTheme";
 import PartDetails from "./PartDetails";
 import SequenceView from "./SequenceView";
+import MermaidCopy from "./MermaidCopy";
 
 const AllPartsView = lazy(() => import("./AllPartsView"));
 
@@ -54,7 +55,7 @@ export default function JourneyView({ graph, theme, journeyIndex, hops, step, pl
   function go(next: number) { setInspectedFlow(null); onPlaying(false); onStep(next); }
   return <>
     <section className="atlas-transit atlas-card" aria-label="Journey sequence">
-      <div className="journey-view-controls"><div className="journey-view-toggle" role="group" aria-label="Diagram view"><button aria-pressed={!allParts} onClick={() => { setAllParts(false); setInspectedFlow(null); }}>This journey</button><button aria-pressed={allParts} onClick={() => setAllParts(true)}>All parts</button></div></div>
+      <div className="journey-view-controls"><div className="journey-view-toggle" role="group" aria-label="Diagram view"><button aria-pressed={!allParts} onClick={() => { setAllParts(false); setInspectedFlow(null); }}>This journey</button><button aria-pressed={allParts} onClick={() => setAllParts(true)}>All parts</button></div><MermaidCopy story={story} journeyIndex={allParts || !journey ? undefined : journeyIndex} /></div>
       {allParts ? <Suspense fallback={<p role="status" className="atlas-padding atlas-muted">Loading all parts…</p>}><AllPartsView story={story} selectedId={actor.id} currentFlow={inspectedFlow ?? hop?.flow} onSelectActor={onSelectActor} onInspect={flow => { setInspectedFlow(flow); onPlaying(false); }} /></Suspense> : <SequenceView story={story} hops={hops} step={step} actor={actor} theme={theme} onStep={go} onSelectActor={onSelectActor} />}
       {hops.length ? <>
         <div className="journey-stepper"><span className="atlas-mono atlas-muted">{String(step + 1).padStart(2, "0")} of {String(hops.length).padStart(2, "0")}</span>

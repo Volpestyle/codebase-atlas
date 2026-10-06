@@ -13,11 +13,12 @@ Usage:
   atlas serve [--port PORT] [--token CODE] [PATH ...]
   atlas story brief [REPOSITORY]
   atlas story check [REPOSITORY]
+  atlas story mermaid [REPOSITORY] [--journey NAME|INDEX]
 
 Commands:
   scan     Write a repository graph as JSON
   serve    Expose shared repositories through the HTTP API
-  story    Brief a coding agent or validate its story
+  story    Brief, check or export a written story
 
 Run `atlas COMMAND --help` for command options.";
 
@@ -47,11 +48,14 @@ const STORY_HELP: &str = "Write and check a repository story with your own codin
 Usage:
   atlas story brief [REPOSITORY]
   atlas story check [REPOSITORY]
+  atlas story mermaid [REPOSITORY] [--journey NAME|INDEX]
 
 The repository defaults to the current directory.
 brief prints authoring rules, scan facts, the existing story, and warnings.
 check prints coverage to stdout and warnings to stderr; exits 0 for a valid
 story, 1 for story warnings or no usable story, and 2 for usage errors.
+mermaid exports all parts as a flowchart, or one journey as a sequence.
+--journey accepts an exact name or 1-based index; invalid selectors exit 1.
 Atlas never calls a model or writes the story file.
 
 Options:
@@ -61,6 +65,7 @@ Options:
 enum StoryCommand {
     Brief,
     Check,
+    Mermaid,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -75,6 +80,7 @@ enum Action {
     Story {
         command: StoryCommand,
         repository: PathBuf,
+        journey: Option<String>,
     },
     Serve {
         port: u16,
@@ -102,7 +108,8 @@ pub fn run(args: impl IntoIterator<Item = OsString>) -> u8 {
         Ok(Action::Story {
             command,
             repository,
-        }) => match run_story(command, &repository) {
+            journey,
+        }) => match run_story(command, &repository, journey.as_deref()) {
             Ok(code) => return code,
             Err(error) => {
                 eprintln!("atlas story: {error}");
@@ -166,7 +173,8 @@ fn parse_help(args: &[OsString]) -> Result<Action, String> {
         [command] if command == "serve" => Ok(Action::Help(SERVE_HELP)),
         [command] if command == "story" => Ok(Action::Help(STORY_HELP)),
         [command, subcommand]
-            if command == "story" && (subcommand == "brief" || subcommand == "check") =>
+            if command == "story"
+                && (subcommand == "brief" || subcommand == "check" || subcommand == "mermaid") =>
         {
             Ok(Action::Help(STORY_HELP))
         }
@@ -258,12 +266,13 @@ fn parse_serve(args: &[OsString]) -> Result<Action, String> {
 
 fn parse_story(args: &[OsString]) -> Result<Action, String> {
     let Some(subcommand) = args.first() else {
-        return Err("story needs brief or check".to_owned());
+        return Err("story needs brief, check or mermaid".to_owned());
     };
     let command = match subcommand.to_str() {
         Some("-h" | "--help") => return Ok(Action::Help(STORY_HELP)),
         Some("brief") => StoryCommand::Brief,
         Some("check") => StoryCommand::Check,
+        Some("mermaid") => StoryCommand::Mermaid,
         _ => {
             return Err(format!(
                 "unknown story command `{}`",
@@ -272,13 +281,28 @@ fn parse_story(args: &[OsString]) -> Result<Action, String> {
         }
     };
     let mut repository = None;
+    let mut journey = None;
     let mut positional = false;
-    for arg in &args[1..] {
+    let mut index = 1;
+    while index < args.len() {
+        let arg = &args[index];
         let text = arg.to_str();
         if !positional && text == Some("--") {
             positional = true;
         } else if !positional && matches!(text, Some("-h" | "--help")) {
             return Ok(Action::Help(STORY_HELP));
+        } else if !positional && text == Some("--journey") && command == StoryCommand::Mermaid {
+            if journey.is_some() {
+                return Err("--journey may be supplied only once".to_owned());
+            }
+            index += 1;
+            journey = Some(
+                args.get(index)
+                    .and_then(|value| value.to_str())
+                    .filter(|value| !value.is_empty() && !value.starts_with("--"))
+                    .ok_or_else(|| "--journey needs a name or 1-based index".to_owned())?
+                    .to_owned(),
+            );
         } else if !positional && text.is_some_and(|value| value.starts_with('-')) {
             return Err(format!("unknown story option `{}`", arg.to_string_lossy()));
         } else if repository.is_none() {
@@ -286,16 +310,23 @@ fn parse_story(args: &[OsString]) -> Result<Action, String> {
         } else {
             return Err("story accepts at most one repository path".to_owned());
         }
+        index += 1;
     }
     Ok(Action::Story {
         command,
         repository: repository.unwrap_or_else(|| PathBuf::from(".")),
+        journey,
     })
 }
 
-fn run_story(command: StoryCommand, repository: &std::path::Path) -> Result<u8, String> {
+fn run_story(
+    command: StoryCommand,
+    repository: &std::path::Path,
+    journey: Option<&str>,
+) -> Result<u8, String> {
     let (report, code) = match command {
         StoryCommand::Brief => (crate::story_brief(repository)?, 0),
+        StoryCommand::Mermaid => (crate::story_mermaid(repository, journey)?, 0),
         StoryCommand::Check => {
             let check = crate::story_check(repository)?;
             for warning in &check.warnings {
@@ -308,7 +339,7 @@ fn run_story(command: StoryCommand, repository: &std::path::Path) -> Result<u8, 
         }
     };
     let mut stdout = io::stdout().lock();
-    writeln!(stdout, "{report}").map_err(|error| format!("Could not write stdout: {error}"))?;
+    write!(stdout, "{report}").map_err(|error| format!("Could not write stdout: {error}"))?;
     Ok(code)
 }
 
@@ -388,14 +419,16 @@ mod tests {
             parse(&args(&["story", "brief"])),
             Ok(Action::Story {
                 command: StoryCommand::Brief,
-                repository: PathBuf::from(".")
+                repository: PathBuf::from("."),
+                journey: None
             })
         );
         assert_eq!(
             parse(&args(&["story", "check", "--", "-repo"])),
             Ok(Action::Story {
                 command: StoryCommand::Check,
-                repository: PathBuf::from("-repo")
+                repository: PathBuf::from("-repo"),
+                journey: None
             })
         );
         for values in [
@@ -415,6 +448,55 @@ mod tests {
             assert!(parse(&args(values)).is_err());
             assert_eq!(run(args(values)), 2);
         }
+    }
+
+    #[test]
+    fn mermaid_options_and_failures_are_explicit() {
+        assert_eq!(
+            parse(&args(&[
+                "story",
+                "mermaid",
+                "--journey",
+                "A journey",
+                "/repo"
+            ])),
+            Ok(Action::Story {
+                command: StoryCommand::Mermaid,
+                repository: PathBuf::from("/repo"),
+                journey: Some("A journey".to_owned())
+            })
+        );
+        assert_eq!(
+            parse(&args(&["story", "mermaid"])),
+            Ok(Action::Story {
+                command: StoryCommand::Mermaid,
+                repository: PathBuf::from("."),
+                journey: None
+            })
+        );
+        for values in [
+            &["story", "mermaid", "--journey"][..],
+            &["story", "mermaid", "--journey", "--help"],
+            &["story", "mermaid", "--journey", "1", "--journey", "2"],
+            &["story", "brief", "--journey", "1"],
+        ] {
+            assert!(parse(&args(values)).is_err());
+        }
+        let root = tempfile::tempdir().unwrap();
+        assert!(crate::story_mermaid(root.path(), None).is_err());
+        std::fs::create_dir(root.path().join(".codebase-index")).unwrap();
+        std::fs::write(root.path().join(".codebase-index/_story.json"),
+            r#"{"summary":"Example","actors":[{"id":"a","name":"A","role":"core","blurb":""},{"id":"b","name":"B","role":"store","blurb":""}],"flows":[{"from":"a","to":"b","carries":"A request.","returns":"A reply."}],"journeys":[{"name":"Round trip","steps":["a","b","a"]}]}"#).unwrap();
+        let diagram = crate::story_mermaid(root.path(), Some("Round trip")).unwrap();
+        assert!(diagram.contains("a0->>a1: A request."));
+        assert!(diagram.contains("a1-->>a0: A reply."));
+        assert_eq!(
+            crate::story_mermaid(root.path(), Some("1")).unwrap(),
+            diagram
+        );
+        assert!(crate::story_mermaid(root.path(), Some("0")).is_err());
+        std::fs::write(root.path().join(".codebase-index/_story.json"), "broken").unwrap();
+        assert!(crate::story_mermaid(root.path(), None).is_err());
     }
 
     #[test]

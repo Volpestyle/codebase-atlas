@@ -36,7 +36,11 @@ flowchart LR
 
 ## Design Decisions
 
-- **One graph across adapters:** scripts, agents, paired devices and desktop use the same Rust implementation. The desktop Share dialog or `atlas serve` exposes it on port 7420 over LAN or Tailscale. A pairing code gates catalog and scans; paths must lie under shared roots. Mobile borrows the computer’s scan rather than cloning code.
+- **One graph across adapters:** scripts, agents, paired devices and desktop use the same Rust implementation. The desktop Share dialog or `atlas story mermaid` reads and validates the story before exporting it. Without `--journey` it writes a `flowchart LR`, grouped in role subgraphs, with carries as edge labels. An exact journey name or **1-based index** writes a `sequenceDiagram`: actor names label participants, forward messages use `->>`, returns use `-->>` and the return sentence (or carries when no return is written). Names take precedence over numeric indices. Unknown journeys and unusable/warning-bearing stories fail with exit 1; malformed options exit 2. The default repository is `.`. Output goes only to stdout.
+
+Exports include a Mermaid `base` theme init directive with white/card surfaces, ink text, hairline grey lines, Geist/system fonts and no mirrored sequence footer. This is a portable light monochrome theme even when Atlas is dark; the receiving renderer controls available fonts and Mermaid version. Labels use decimal Mermaid entities, generated participant IDs and normalized whitespace to prevent story text becoming diagram syntax or HTML. A shared special-character fixture checks exact TypeScript/Rust parity.
+
+`atlas serve` exposes it on port 7420 over LAN or Tailscale. A pairing code gates catalog and scans; paths must lie under shared roots. Mobile borrows the computer’s scan rather than cloning code.
 - **Three flat screens replace the 3D map and import flow:** the earlier orthographic Three.js field and import-flow diagram were both projections of the same two scanned facts — containment and imports — and neither could answer what a reader asks: what travels where, and which files do that work. The workspace now separates **prose written by hand** (parts, flows, journeys) from **facts read from code** (files, lines, declarations, import crossings) and labels each. *How it works* follows the data along a written journey; *Where it lives* puts the selected part on a flat file territory, because depth on a 3D field encoded nothing a treemap's area does not; *Inside a part* shows the declarations and crossings that justify the prose. Three.js, the legacy design primitives and their camera controls were removed with the views.
 - **Source-control-aware traversal:** the `ignore` crate handles `.gitignore`, `.ignore`, global excludes and common generated trees. Scan output is sorted and bounded at 4,000 nodes; line counting skips files over 2 MiB. Declaration indexing stops at 128 names per file and 60,000 overall.
 - **Parsed facts:** tree-sitter reads TypeScript, JavaScript and Rust declarations and imports. Relative paths, workspace package/crate names, `new URL(path, import.meta.url)` and Rust `use` resolve against the scanned tree. Unresolved external packages are dropped. This is not a compiler: path aliases, re-export chains and dynamic module schemes remain out of scope.
@@ -50,6 +54,7 @@ flowchart LR
 - **Declaration order:** Inside a part lists files by path and declarations exported first, then by line. It explicitly does not claim execution/call order. Tests are files that import the part; inline Rust tests do not become invented test files.
 - **All parts uses ELK only on demand:** a secondary toggle exposes the whole network for orientation. ELK layered placement uses role partitions and orthogonal routing; a fixed seed and input order make the adapter deterministic. Its code loads when All parts opens, keeping the default sequence fast. The large network scrolls inside the card.
 - **Hairline presentation:** shared light/dark tokens live in `ui/tokens.css`; React Hairline figures use those surfaces. People remain text, while other roles have documented figure defaults. Theme storage is guarded and system changes apply until a preference is saved; a `prefers-color-scheme` fallback in the tokens paints the right theme before React runs, so there is no light flash. The viewport allows pinch zoom (WCAG 1.4.4). Responsive layouts collapse the sidebar into top controls, reflow cards, and scroll the transit card internally on narrow screens.
+- **Mermaid is an export, not the renderer:** Atlas needs selectable parts, playback, packet motion, scanned details and responsive scrolling. React renders those interactions; Mermaid provides portable story text for docs and chat. The TS formatter backs Copy as Mermaid and shares an exact-output fixture with Rust. The export carries a fixed light monochrome theme and safely encodes labels.
 - **Repository access is read-only:** local scans read metadata and bounded text. GitHub fetches no source files or per-file summaries; a story read is capped at 256 KiB. Maps can travel as JSON snapshots and never execute the code they describe.
 
 ```mermaid
@@ -61,6 +66,10 @@ flowchart TD
   Facts --> Coverage[territory + treemap]
   Facts --> Declarations[partDeclarations]
   Transit --> Journey[JourneyView]
+  Graph --> Network[Lazy ELK layered layout]
+  Network --> Journey
+  Graph --> Export[Mermaid formatter]
+  Journey --> Export
   Coverage --> Territory[TerritoryView]
   Declarations --> Part[PartView]
   Figures --> Journey
@@ -78,6 +87,9 @@ atlas scan . > codebase-atlas.atlas.json
 atlas scan --pretty --output map.atlas.json /path/to/repository
 atlas story brief /path/to/repository
 atlas story check /path/to/repository
+atlas story mermaid /path/to/repository > all-parts.mmd
+atlas story mermaid /path/to/repository --journey "Someone opens a folder on their laptop" > journey.mmd
+atlas story mermaid --journey 1 > first-journey.mmd
 ```
 
 `atlas scan` writes only `RepositoryGraph` JSON to stdout. `--output` writes the same payload to a file. Usage errors exit 2, scan or I/O failures exit 1, and diagnostics go to stderr, so the command composes safely with shell pipelines and agent tooling.
@@ -109,11 +121,11 @@ let json = codebase_atlas_lib::scan_json(std::path::Path::new("."), false)?;
 ## Interaction
 
 - The **Source** menu retains **Scan directory** and **Share** on desktop, **Computer** for companion connections, **GitHub URL**, and **Open/Save map**. Share exposes pairing QR/code and reachable addresses. **Share folder** adds a root; scanned folders are shared automatically. Computer accepts a host/code or pairing QR. iOS Camera can open a paired deep link.
-- **How it works** opens first as a journey sequence. Pick a written journey, use Prev/Play/Next or its ticks, and follow the carries/returns headline. Select a hop or participant header, or a part card, to inspect its exchanges, files and crossings. Dashed arrows are answers coming back. The sequence scrolls inside its card, with a vertical exchange list on phones. Use **All parts** to explore the role-grouped network and select connections. **Look inside** opens the selected part.
+- **How it works** opens first as a journey sequence. Pick a written journey, use Prev/Play/Next or its ticks, and follow the carries/returns headline. Select a hop or participant header, or a part card, to inspect its exchanges, files and crossings. Dashed arrows are answers coming back. The sequence scrolls inside its card, with a vertical exchange list on phones. Use **All parts** to explore the role-grouped network and select connections. **Copy as Mermaid** exports the visible mode; blocked clipboard access reveals selectable text. **Look inside** opens the selected part.
 - **Where it lives** highlights the selected part in a file treemap. The legend's whole-number percentages count product source for each part that owns files, then **Not in the story**, which selects the gap and its suggestions. Choose another part, press the trace toggle to follow a written journey across each part’s largest file, select a tile, or browse every file. People and outside systems without files are named outside the trace.
 - **Inside a part** shows written Arrives/Leaves beside scanned files, declarations, crossings and importing tests. Choose a part from the part list (a disclosure, so long names wrap instead of truncating) or from its exchange and crossing links; a part without files shows only its written exchanges. Expand file rows to see their names and line numbers. File links take the selection to Where it lives.
 - A missing story explains `atlas story brief` and `atlas story check`; Where it lives still shows the files. GitHub maps explicitly explain the lack of imports, declarations and line counts. Warnings remain visible.
-- Search matches names, paths, languages, codebase-index summaries and declarations. Press `/` to focus search, `G` to open GitHub, `C` to Share (desktop) or Computer (mobile/browser), and `Esc` to close source/pairing dialogs or an open Source menu (focus returns to its button). Shortcuts ignore keys held with Cmd, Ctrl or Alt, so copy and other system chords pass through. Keyboard users can select transit routes and file tiles; tiny tiles have the accessible file list.
+- Search matches names, paths, languages, codebase-index summaries and declarations. Press `/` to focus search, `G` to open GitHub, `C` to Share (desktop) or Computer (mobile/browser), and `Esc` to close source/pairing dialogs or an open Source menu (focus returns to its button). Shortcuts ignore keys held with Cmd, Ctrl or Alt, so copy and other system chords pass through. Keyboard users can select exchange rows, participant headers, All parts routes and file tiles; tiny tiles have the accessible file list.
 - Theme follows the system by default; Light/Dark remembers a preference on this device. The last successful local, GitHub or companion source reloads next launch.
 - Save exports `.atlas.json` with scan facts and story. Open works anywhere. Put a snapshot at `public/maps/default.atlas.json` to bundle it for offline use; generate it with `cargo run --manifest-path src-tauri/Cargo.toml --bin atlas -- scan --output public/maps/default.atlas.json .`. Snapshots stay out of git and need regeneration to refresh.
 
@@ -176,10 +188,12 @@ src/
   sourceScope.ts          TS mirror of Rust product-source scope and isTestPath
   territory.ts            coverage, conservative gap derivation and map layout
   treemap.ts              weighted-volume and squarified packing utilities
-  SequenceView.tsx         sticky participant columns, exchange rows and phone list
+  SequenceView.tsx        sticky participant columns, exchange rows and phone list
   sequenceLayout.ts       first-visit columns and rows sized to full sentences
   AllPartsView.tsx        lazy whole-network view and connection inspection
   elkLayout.ts            deterministic ELK layered/orthogonal adapter
+  MermaidCopy.tsx         clipboard export with selectable-text fallback
+  mermaid.ts              shared web formatter and safe label encoding
   journey.ts              journey hops, flow keys and label wrapping
   partDeclarations.ts     exported-first declaration ordering
   storyFigures.ts         figure catalogue and role defaults
@@ -204,6 +218,7 @@ src-tauri/src/
   symbols.rs              tree-sitter declaration and import extraction
   story.rs                story file parsing and validation against the scan
   story_authoring.rs      bounded authoring digest and coverage check
+  mermaid.rs              validated story export and shared fixture test
   source_scope.rs         product-source exclusions shared by brief and coverage
   companion.rs            authenticated /v1 HTTP adapter
   bin/atlas.rs            atlas scan / serve / story entry point
