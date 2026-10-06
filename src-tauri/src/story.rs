@@ -12,7 +12,7 @@ use std::{collections::BTreeSet, fs, path::Path};
 use serde::{Deserialize, Serialize};
 
 /// The file is small and hand-written; a runaway one is a mistake, not a repo.
-const MAX_BYTES: u64 = 256 * 1024;
+pub(crate) const MAX_BYTES: u64 = 256 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,7 +60,7 @@ pub(crate) struct Actor {
 pub(crate) struct Flow {
     pub from: String,
     pub to: String,
-    /// What travels, in words: "a message someone typed", not "MessageEvent".
+    /// What travels, in words: "a message someone typed", not `MessageEvent`.
     pub carries: String,
     /// What comes back, when anything does. One drawn arrow carries both
     /// directions so a round trip does not double every line on the diagram.
@@ -103,12 +103,9 @@ pub(crate) fn attach_story(
         }
         _ => {}
     }
-    let text = match fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(_) => {
-            warnings.push("Could not read the story file.".to_owned());
-            return None;
-        }
+    let Ok(text) = fs::read_to_string(&path) else {
+        warnings.push("Could not read the story file.".to_owned());
+        return None;
     };
     let mut story: Story = match serde_json::from_str(&text) {
         Ok(story) => story,

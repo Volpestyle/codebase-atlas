@@ -5,12 +5,14 @@ mod companion;
 mod imports;
 mod scanner;
 mod story;
+mod story_authoring;
 mod symbols;
 
 #[cfg(feature = "app")]
 pub use app::run;
 pub use companion::{DEFAULT_PORT, PROTOCOL, generate_token, serve_blocking};
 pub use scanner::RepositoryGraph;
+pub use story_authoring::{StoryCheck, story_brief, story_check};
 
 use std::path::Path;
 

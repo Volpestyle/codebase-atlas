@@ -32,6 +32,8 @@ flowchart LR
     GH --> G
     M --> GH
     M[".codebase-index/_story.json"] --> C
+    G --> B[Story brief and coverage check]
+    A[docs/writing-a-story.md] --> B
     G --> I[Searchable module index]
     G --> J[Three.js orthographic scene]
     G --> P[SVG import flow diagram]
@@ -86,6 +88,7 @@ flowchart LR
   G --> Q[Search · inspector · map · flow]
   G --> Z[Story view]
 ```
+- **Story authoring ships with the CLI:** `atlas story brief` embeds `docs/writing-a-story.md` and bounded scan facts for the user’s own coding agent; `atlas story check` reuses scan validation and reports product-source coverage. Atlas never calls a model or writes the story. README links to the rules instead of duplicating them.
 - **Story view:** the landing view, and the only one written for a reader who has never opened a codebase. It draws a hand-authored `.codebase-index/_story.json`: actors with a plain-English blurb, the flows between them, and named journeys data takes end to end. It exists because the map and the flow view are both projections of the same two facts — containment and imports — and neither can express what a reader actually asks. The decisive gap is that the most important nodes in a data-flow story are not in the repository at all: the person typing, the chat service, the model being called. No parse can invent them, so the narrative is authored rather than derived, and a repository without the file gets an empty state explaining how to write one instead of a diagram derived from structure — which would only be the flow view with fewer chips.
 - **Role is the layout:** a story file carries no coordinates. An actor's `role` — `person`, `surface`, `door`, `core`, `store`, `external` — is also its column, in that reading order, so naming an actor honestly places it. Empty roles collapse rather than leaving a gap. Return paths and same-stage links draw as dashed arcs, which is why a round trip needs no second row of boxes.
 - **One arrow, both directions:** a flow records what it `carries` and, when anything comes back, what it `returns`. A journey step taken against a flow reads as its return text. Drawing one line per pair instead of two keeps a round-trip journey from doubling every arc on the diagram.
@@ -115,6 +118,8 @@ cargo install --locked --path src-tauri --bin atlas
 atlas --help
 atlas scan . > codebase-atlas.atlas.json
 atlas scan --pretty --output map.atlas.json /path/to/repository
+atlas story brief /path/to/repository
+atlas story check /path/to/repository
 ```
 
 `atlas scan` writes only `RepositoryGraph` JSON to stdout. `--output` writes the same payload to a file. Usage errors exit 2, scan or I/O failures exit 1, and diagnostics go to stderr, so the command composes safely with shell pipelines and agent tooling.
@@ -176,40 +181,17 @@ flowchart LR
 
 ## Writing a story
 
-The story view reads `.codebase-index/_story.json` from a local scan or, on the web, from the public GitHub repository’s default branch. Commit the file to make the story available on the web; no model call is needed. It is written by hand (or by an agent that maintains the index), not derived, because the parts that matter most to a reader — the person typing, the chat service, the model being called — are not files in the repository.
+The [authoring rules and schema](docs/writing-a-story.md) are the single source embedded in `atlas story brief`. The web reads a committed story from the default branch; local scans read the same file from disk.
 
-```json
-{
-  "summary": "One paragraph a non-programmer can read.",
-  "actors": [
-    { "id": "person", "name": "Someone in Discord", "role": "person",
-      "blurb": "Anyone chatting with Clankie in a server or a DM." },
-    { "id": "front-door", "name": "The front door", "role": "door",
-      "blurb": "Every request lands here first. It checks who is calling.",
-      "modules": ["apps/clankie/src/app.ts", "packages/api-client"] }
-  ],
-  "flows": [
-    { "from": "person", "to": "front-door",
-      "carries": "a message someone typed",
-      "returns": "his reply, posted back in the same place" }
-  ],
-  "journeys": [
-    { "name": "Someone asks a question",
-      "blurb": "The ordinary path.",
-      "steps": ["person", "front-door", "person"] }
-  ]
-}
+```bash
+atlas story brief . > /tmp/atlas-story-brief.md
+# Give the brief to your coding agent; it writes .codebase-index/_story.json.
+atlas story check .
 ```
 
-- `role` is also the column, in the order `person`, `surface`, `door`, `core`, `store`, `external`. There are no coordinates: name the role honestly and the layout follows.
-- `modules` are paths as the scan sees them. An actor is a role, not a directory — several modules can serve one, and people and outside services have none.
-- `carries` and `returns` are sentences, not type names. One arrow carries both directions.
-- `steps` are actor ids. Consecutive pairs need a flow in one direction or the other; a step taken against a flow reads as its `returns`.
-- Everything is checked against the scanned tree. Unknown ids and stale paths are dropped and reported as scan warnings rather than failing the scan, so the story keeps rendering the part that is still true.
-- Missing stories produce no warning. Files over 256 KiB, malformed JSON, invalid field types, or unknown roles are rejected with a warning; the rest of the map still loads.
-- `.codebase-index/` itself is not scanned, so a story cannot list itself as one of an actor's modules.
+The brief includes a compact scan digest, the existing story, and scan/validation warnings. The digest chooses the deepest uniform directory level that fits at most 150 modules, lists up to six exported declarations per module, and aggregates at most 150 import routes with up to eight crossing names each. Display labels are bounded; omitted entries are counted. It supplies facts for an agent to investigate, not prose inferred from imports.
 
-This repository carries its own story at `.codebase-index/_story.json`. Scanning Atlas with Atlas is the shortest way to see what a finished one looks like.
+The check prints warnings to stderr and coverage to stdout. Coverage counts scanned product-source lines covered by the union of actor modules (a directory covers its descendants), excluding test/support paths, lockfiles, config nodes and `*.config.*` files, and documentation. It lists uncovered files largest first. Coverage is informational: a valid story exits 0 even with uncovered code; warnings or no usable story exit 1, and usage errors exit 2. Truncated scans and skipped line counts limit coverage to the available scan; warnings are reported rather than presenting it as whole-repository coverage.
 
 ## Development
 
@@ -258,6 +240,7 @@ src/
   github-url.ts           GitHub URL validation
   github.ts               GitHub API and tree-to-graph adapter
   model.ts                frontend graph contract and formatting
+docs/writing-a-story.md    authoring rules embedded in the CLI
 src-tauri/src/
   lib.rs                  public scan API and feature boundary
   app.rs                  thin Tauri command and lifecycle adapter
@@ -266,6 +249,7 @@ src-tauri/src/
   imports.rs              specifier resolution against the scanned tree
   symbols.rs              tree-sitter declaration and import extraction
   story.rs                story file parsing and validation against the scan
+  story_authoring.rs      bounded authoring digest and coverage check
   companion.rs            authenticated /v1 HTTP adapter
   bin/atlas.rs             atlas scan / serve entry point
   bin/scan.rs             compatibility alias for atlas scan

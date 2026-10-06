@@ -34,16 +34,16 @@ const GENERATED_DIRECTORIES: &[&str] = &[
 #[serde(rename_all = "camelCase")]
 pub struct RepositoryGraph {
     root: String,
-    name: String,
+    pub(crate) name: String,
     branch: Option<String>,
     source: RepositorySource,
-    nodes: Vec<RepositoryNode>,
-    edges: Vec<RepositoryEdge>,
-    stats: RepositoryStats,
+    pub(crate) nodes: Vec<RepositoryNode>,
+    pub(crate) edges: Vec<RepositoryEdge>,
+    pub(crate) stats: RepositoryStats,
     /// The hand-authored narrative layer, when the repository carries one.
     #[serde(skip_serializing_if = "Option::is_none")]
-    story: Option<Story>,
-    warnings: Vec<String>,
+    pub(crate) story: Option<Story>,
+    pub(crate) warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -55,21 +55,21 @@ pub(crate) enum RepositorySource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RepositoryNode {
-    id: String,
+    pub(crate) id: String,
     name: String,
     path: String,
-    kind: NodeKind,
+    pub(crate) kind: NodeKind,
     extension: Option<String>,
     language: Option<String>,
     size_bytes: u64,
-    lines: u64,
-    depth: usize,
+    pub(crate) lines: u64,
+    pub(crate) depth: usize,
     child_count: usize,
     description: Option<String>,
     /// Declarations this file makes. Empty for directories and for languages
     /// the extractor does not read.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    symbols: Vec<Symbol>,
+    pub(crate) symbols: Vec<Symbol>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -86,14 +86,14 @@ pub(crate) enum NodeKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RepositoryEdge {
-    source: String,
-    target: String,
-    kind: EdgeKind,
+    pub(crate) source: String,
+    pub(crate) target: String,
+    pub(crate) kind: EdgeKind,
     /// For an import edge, the named bindings that cross it — what the source
     /// actually takes from the target. Empty for containment, for side-effect
     /// and dynamic imports, and `*` for namespace and glob imports.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    symbols: Vec<String>,
+    pub(crate) symbols: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -113,7 +113,7 @@ pub(crate) struct RepositoryStats {
     imports_available: bool,
     bytes: u64,
     languages: Vec<LanguageStat>,
-    truncated: bool,
+    pub(crate) truncated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
