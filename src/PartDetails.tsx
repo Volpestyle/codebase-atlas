@@ -1,10 +1,15 @@
 import { crossingLabel, formatBytes, ROLE_HEADINGS, type RepositoryGraph, type RepositoryNode, type StoryActor } from "./model";
-import { actorExchanges, filesForActor, partCrossings, type ProseExchange } from "./storyFacts";
+import { actorExchanges, filesBySize, filesForActor, partCrossings, type ProseExchange } from "./storyFacts";
 
 export function FileList({ graph, files, onOpenFile }: { graph: RepositoryGraph; files: RepositoryNode[]; onOpenFile: (id: string) => void }) {
-  return files.length ? <ul className="atlas-files">{files.map(file => <li key={file.id}>
+  const ranked = filesBySize(graph, files);
+  const list = (rows: RepositoryNode[]) => <ul className="atlas-files">{rows.map(file => <li key={file.id}>
     <button onClick={() => onOpenFile(file.id)} title={`Open ${file.path} in Where it lives`}><span>{file.path}</span><span>{graph.stats.lineCountAvailable ? `${file.lines.toLocaleString()} lines` : formatBytes(file.sizeBytes)}</span></button>
-  </li>)}</ul> : <p className="atlas-muted">No files in this repository. This part is a person or an outside system.</p>;
+  </li>)}</ul>;
+  return files.length ? <>
+    {list(ranked.slice(0, 8))}
+    {ranked.length > 8 && <details className="atlas-more-files" key={JSON.stringify(ranked.map(file => file.id))}><summary>Show all {ranked.length} files</summary>{list(ranked.slice(8))}</details>}
+  </> : <p className="atlas-muted">No files in this repository. This part is a person or an outside system.</p>;
 }
 
 /** One line per exchange: what travels, then who it comes from or goes to. */
@@ -19,7 +24,7 @@ export function Crossings({ graph, actor, onSelectActor, onOpenFile }: { graph: 
     <span className="atlas-muted">{crossing.direction === "in" ? "Takes from" : "Used by"} </span>
     {crossing.other ? <button onClick={() => onSelectActor(crossing.other!)}>{graph.story?.actors.find(part => part.id === crossing.other)?.name}</button> : <span>{crossing.files.length} file{crossing.files.length === 1 ? "" : "s"} in no part</span>}
     <p className="atlas-mono">{crossingLabel(crossing.names) ?? "Whole module / no named bindings"}</p>
-    <details><summary>{crossing.count} import edge{crossing.count === 1 ? "" : "s"} · names and files</summary><p className="atlas-mono">{crossing.names.length ? crossing.names.join(", ") : "No named bindings recorded"}</p><ul>{crossing.files.map(path => <li key={path}><button className="atlas-mono" onClick={() => onOpenFile(path)}>{path}</button></li>)}</ul></details>
+    <details><summary>{crossing.count} import edge{crossing.count === 1 ? "" : "s"} · names and files</summary><p className="atlas-mono">{crossing.names.length ? crossing.names.join(", ") : "No named bindings recorded"}</p><FileList graph={graph} files={graph.nodes.filter(file => crossing.files.includes(file.id))} onOpenFile={onOpenFile} /></details>
   </li>)}</ul> : <p className="atlas-muted">No imports cross this part’s boundary in the scan.</p>;
 }
 

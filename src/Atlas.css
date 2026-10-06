@@ -194,7 +194,7 @@ html:has(.atlas-shell), html:has(.atlas-shell) body, html:has(.atlas-shell) #roo
 .atlas-gap-details > .atlas-gap > h2 { margin-top:4px; }
 
 /* Journey sequences preserve first-visit columns and every repeated exchange. */
-.sequence-scroll { max-height:640px; overflow:auto; position:relative; }
+.sequence-scroll { max-height:75vh; overflow:auto; position:relative; }
 .sequence-field { position:relative; margin:0 auto; }
 .sequence-field > svg { position:absolute; inset:0; }
 .sequence-heads { position:sticky; top:0; z-index:3; background:var(--card); border-bottom:1px solid var(--line); box-sizing:border-box; }
@@ -218,7 +218,7 @@ html:has(.atlas-shell), html:has(.atlas-shell) body, html:has(.atlas-shell) #roo
 .sequence-list { display:none; }
 @media(max-width:600px) {
   .sequence-scroll { display:none; }
-  .sequence-list { display:block; list-style:none; padding:12px; margin:0; max-height:560px; overflow:auto; position:relative; }
+  .sequence-list { display:block; list-style:none; padding:12px; margin:0; max-height:75vh; box-sizing:border-box; overflow:auto; position:relative; }
   .sequence-list li + li { border-top:1px solid var(--line); }
   .sequence-list button { display:flex; width:100%; gap:12px; padding:16px 10px; text-align:left; border-radius:8px; color:var(--muted); }
   .sequence-list button > .atlas-mono { flex-shrink:0; }
@@ -244,3 +244,6 @@ html:has(.atlas-shell), html:has(.atlas-shell) body, html:has(.atlas-shell) #roo
 .mermaid-copy button:hover { background:var(--pill); }
 .mermaid-copy > span { font-size:12px; }
 .mermaid-copy textarea { width:100%; min-height:140px; font:12px/1.6 var(--font-mono); background:var(--bg); color:var(--ink); border:1px solid var(--line); border-radius:8px; padding:8px; }
+
+.atlas-more-files > summary { min-height:44px; display:flex; align-items:center; cursor:pointer; color:var(--muted); font-size:13px; }
+.declaration-files > .atlas-more-files > summary { font-family:var(--font-sans); }

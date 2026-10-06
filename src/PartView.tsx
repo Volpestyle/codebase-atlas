@@ -2,7 +2,7 @@ import type { RepositoryGraph, StoryActor } from "./model";
 import { ROLE_HEADINGS } from "./model";
 import type { Theme } from "./ui/useTheme";
 import PartFigure from "./ui/PartFigure";
-import { filesForActor, supportFilesForActor, testsForActor } from "./storyFacts";
+import { filesBySize, filesForActor, supportFilesForActor, testsForActor } from "./storyFacts";
 import { partDeclarations } from "./partDeclarations";
 import { Crossings, FileList } from "./PartDetails";
 import { GapHints } from "./TerritoryView";
@@ -26,23 +26,28 @@ export function PartHeading({ graph, actor }: { graph: RepositoryGraph; actor: S
 export default function PartView({ graph, actor, theme, onSelectActor, onOpenFile }: {
   graph: RepositoryGraph; actor: StoryActor; theme: Theme; onSelectActor: (id: string) => void; onOpenFile: (id: string) => void;
 }) {
-  const declarations = partDeclarations(graph, actor.id);
+  const byPath = new Map(partDeclarations(graph, actor.id).map(file => [file.path, file]));
   const files = filesForActor(graph, actor.id);
+  const declarations = filesBySize(graph, files).map(file => byPath.get(file.path)!);
   const support = supportFilesForActor(graph, actor.id);
   const tests = testsForActor(graph, actor.id);
   const lines = new Map(files.map(file => [file.path, file.lines]));
   const ids = new Map(files.map(file => [file.path, file.id]));
+  const declarationRows = (rows: typeof declarations) => rows.map(file => <details key={file.path} open={declarations.length === 1}>
+    <summary><span className="atlas-mono">{file.path}</span><span className="atlas-muted">{plural(file.declarations.length, "name")}{graph.stats.lineCountAvailable ? ` · ${plural(lines.get(file.path) ?? 0, "line")}` : ""}</span></summary>
+    <button className="atlas-text-link declaration-open" onClick={() => onOpenFile(ids.get(file.path) ?? file.path)}>Show in Where it lives</button>
+    {file.declarations.length ? <ol>{file.declarations.map((symbol, index) => <li key={`${symbol.line}:${symbol.name}:${index}`}><span className="atlas-mono">{symbol.name}</span><span className="atlas-muted">{symbol.exported ? "exported" : "private"} {symbol.kind} · line {symbol.line}</span></li>)}</ol> : <p className="atlas-padding atlas-muted">No declarations recorded. GitHub sources and unsupported languages have no declaration scan.</p>}
+  </details>);
   return <>
     <div className="atlas-inside">
       <div>
         {files.length ? <>
           <h2>Declarations <small className="atlas-kicker">Scanned</small></h2>
-          <p className="atlas-muted">Files in path order; exported declarations first, then line order. Atlas does not trace execution or calls.</p>
-          <div className="atlas-card declaration-files">{declarations.map(file => <details key={file.path} open={declarations.length === 1}>
-            <summary><span className="atlas-mono">{file.path}</span><span className="atlas-muted">{plural(file.declarations.length, "name")}{graph.stats.lineCountAvailable ? ` · ${plural(lines.get(file.path) ?? 0, "line")}` : ""}</span></summary>
-            <button className="atlas-text-link declaration-open" onClick={() => onOpenFile(ids.get(file.path) ?? file.path)}>Show in Where it lives</button>
-            {file.declarations.length ? <ol>{file.declarations.map((symbol, index) => <li key={`${symbol.line}:${symbol.name}:${index}`}><span className="atlas-mono">{symbol.name}</span><span className="atlas-muted">{symbol.exported ? "exported" : "private"} {symbol.kind} · line {symbol.line}</span></li>)}</ol> : <p className="atlas-padding atlas-muted">No declarations recorded. GitHub sources and unsupported languages have no declaration scan.</p>}
-          </details>)}</div>
+          <p className="atlas-muted">Largest eight files first; exported declarations first, then line order. Atlas does not trace execution or calls.</p>
+          <div className="atlas-card declaration-files" key={actor.id}>
+            {declarationRows(declarations.slice(0, 8))}
+            {declarations.length > 8 && <details className="atlas-more-files"><summary>Show all {declarations.length} files</summary>{declarationRows(declarations.slice(8))}</details>}
+          </div>
           <section className="atlas-file-detail"><h2>In the <em>code</em> <small className="atlas-kicker">Scanned imports</small></h2><Crossings graph={graph} actor={actor} onSelectActor={onSelectActor} onOpenFile={onOpenFile} /></section>
         </> : <p className="atlas-muted atlas-no-files">{actor.name} has no files in this repository, so there are no declarations or imports to read. Its exchanges with other parts are written in the story.</p>}
       </div>

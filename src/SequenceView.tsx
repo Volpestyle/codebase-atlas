@@ -13,6 +13,7 @@ export default function SequenceView({ story, hops, step, actor, theme, onStep, 
   const scrollRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLOListElement>(null);
   const [width, setWidth] = useState(800);
+  const [viewportHeight, setViewportHeight] = useState(0);
   const [edges, setEdges] = useState({ left: false, right: false });
   const reduced = useReducedMotion();
   const marker = useId().replace(/:/g, "");
@@ -28,8 +29,13 @@ export default function SequenceView({ story, hops, step, actor, theme, onStep, 
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const observer = new ResizeObserver(() => { setWidth(el.clientWidth); measureEdges(); });
+    const observer = new ResizeObserver(() => {
+      setWidth(el.clientWidth);
+      setViewportHeight(Math.max(el.clientHeight, listRef.current?.clientHeight ?? 0));
+      measureEdges();
+    });
     observer.observe(el);
+    if (listRef.current) observer.observe(listRef.current);
     return () => observer.disconnect();
   }, []);
   useEffect(() => {
@@ -46,7 +52,7 @@ export default function SequenceView({ story, hops, step, actor, theme, onStep, 
     const row = list?.children[step] as HTMLElement | undefined;
     if (list && row && (row.offsetTop < list.scrollTop || row.offsetTop + row.offsetHeight > list.scrollTop + list.clientHeight)) list.scrollTo({ top: row.offsetTop - 16, behavior });
     measureEdges();
-  }, [current, layout.headerHeight, reduced, step]);
+  }, [current, layout.headerHeight, reduced, step, viewportHeight]);
   return <>
     <div className={`sequence-scroll atlas-transit-scroll${edges.left ? " fade-left" : ""}${edges.right ? " fade-right" : ""}`} ref={scrollRef} onScroll={measureEdges} tabIndex={0} role="region" aria-label="Journey sequence; scroll to explore">
       <div className="sequence-field" style={{ width: layout.width, height: layout.height }}>

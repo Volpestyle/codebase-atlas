@@ -21,6 +21,11 @@ export function ownerForNode(story: Story, path: string): string | null {
   return owner;
 }
 
+/** Largest scanned files first; byte sizes stand in when lines are unavailable. */
+export function filesBySize(graph: RepositoryGraph, files: RepositoryNode[]): RepositoryNode[] {
+  return [...files].sort((a, b) => (graph.stats.lineCountAvailable ? b.lines - a.lines : b.sizeBytes - a.sizeBytes) || a.path.localeCompare(b.path));
+}
+
 /** A part's substance: the product source its modules own. */
 export function filesForActor(graph: RepositoryGraph, actorId: string): RepositoryNode[] {
   return ownedFiles(graph, actorId).filter(isProductSource);
