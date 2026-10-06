@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { type RepositoryGraph, type StoryActor, type StoryFlow } from "./model";
 import { type JourneyHop } from "./journey";
 import { actorFigure } from "./storyFigures";
@@ -6,6 +6,8 @@ import PartFigure from "./ui/PartFigure";
 import type { Theme } from "./ui/useTheme";
 import PartDetails from "./PartDetails";
 import SequenceView from "./SequenceView";
+
+const AllPartsView = lazy(() => import("./AllPartsView"));
 
 export function JourneyHeading({ graph }: { graph: RepositoryGraph }) {
   return <>
@@ -23,6 +25,7 @@ export default function JourneyView({ graph, theme, journeyIndex, hops, step, pl
   const story = graph.story!;
   const journey = story.journeys[journeyIndex];
   const hop = hops[step];
+  const [allParts, setAllParts] = useState(false);
   const [inspectedFlow, setInspectedFlow] = useState<StoryFlow | null>(null);
   useEffect(() => {
     if (!playing || !hops.length) return;
@@ -51,7 +54,8 @@ export default function JourneyView({ graph, theme, journeyIndex, hops, step, pl
   function go(next: number) { setInspectedFlow(null); onPlaying(false); onStep(next); }
   return <>
     <section className="atlas-transit atlas-card" aria-label="Journey sequence">
-      <SequenceView story={story} hops={hops} step={step} actor={actor} theme={theme} onStep={go} onSelectActor={onSelectActor} />
+      <div className="journey-view-controls"><div className="journey-view-toggle" role="group" aria-label="Diagram view"><button aria-pressed={!allParts} onClick={() => { setAllParts(false); setInspectedFlow(null); }}>This journey</button><button aria-pressed={allParts} onClick={() => setAllParts(true)}>All parts</button></div></div>
+      {allParts ? <Suspense fallback={<p role="status" className="atlas-padding atlas-muted">Loading all parts…</p>}><AllPartsView story={story} selectedId={actor.id} currentFlow={inspectedFlow ?? hop?.flow} onSelectActor={onSelectActor} onInspect={flow => { setInspectedFlow(flow); onPlaying(false); }} /></Suspense> : <SequenceView story={story} hops={hops} step={step} actor={actor} theme={theme} onStep={go} onSelectActor={onSelectActor} />}
       {hops.length ? <>
         <div className="journey-stepper"><span className="atlas-mono atlas-muted">{String(step + 1).padStart(2, "0")} of {String(hops.length).padStart(2, "0")}</span>
           <span className="journey-hop">{name(hop.from)} <span className="atlas-muted">to</span> {name(hop.to)}</span>
@@ -60,7 +64,7 @@ export default function JourneyView({ graph, theme, journeyIndex, hops, step, pl
         <div className="journey-ticks">{hops.map((each, index) => <button key={index} className={index < step ? "is-visited" : index === step ? "is-current" : ""} aria-label={`Step ${index + 1}: ${name(each.from)} to ${name(each.to)}`} aria-current={index === step ? "step" : undefined} onClick={() => go(index)}><span /></button>)}</div>
       </> : <p className="atlas-muted atlas-padding">No journeys written yet. Select a connection to read what travels.</p>}
     </section>
-    <section className="what-travels"><span className="atlas-kicker">What travels · Written story</span><p aria-live="polite">“{text ?? "Pick a connection to follow the data"}”</p><span className="atlas-muted">{fromActor?.name}{toActor && ` to ${toActor.name}`}{hop?.reversed && !inspectedFlow ? " · the return trip" : ""}{journey?.blurb ? ` · ${journey.blurb}` : ""}</span>
+    <section className="what-travels"><span className="atlas-kicker">What travels · Written story</span><p aria-live="polite">“{text ?? "Pick a connection to follow the data"}”</p><span className="atlas-muted">{fromActor?.name}{toActor && ` to ${toActor.name}`}{hop?.reversed && !inspectedFlow ? " · the return trip" : ""}{journey?.blurb && !inspectedFlow ? ` · ${journey.blurb}` : ""}</span>
       {inspectedFlow?.returns && <p className="flow-return">Comes back: {inspectedFlow.returns}</p>}
     </section>
     {cards.length > 0 && <>

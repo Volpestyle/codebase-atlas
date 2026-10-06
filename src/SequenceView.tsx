@@ -39,7 +39,9 @@ export default function SequenceView({ story, hops, step, actor, theme, onStep, 
     // Move only when needed, leaving room for the sticky participant headers.
     const target = Math.max(0, current.top - layout.headerHeight - 32);
     const top = current.top < el.scrollTop + layout.headerHeight || current.top + current.height > el.scrollTop + el.clientHeight ? target : el.scrollTop;
-    el.scrollTo({ left: Math.max(0, (current.x1 + current.x2) / 2 - el.clientWidth / 2), top, behavior });
+    const centered = (current.x1 + current.x2) / 2 - el.clientWidth / 2;
+    const left = Math.max(0, current.left + current.labelWidth - el.clientWidth + 16, Math.min(centered, current.left - 16));
+    el.scrollTo({ left, top, behavior });
     const list = listRef.current;
     const row = list?.children[step] as HTMLElement | undefined;
     if (list && row && (row.offsetTop < list.scrollTop || row.offsetTop + row.offsetHeight > list.scrollTop + list.clientHeight)) list.scrollTo({ top: row.offsetTop - 16, behavior });

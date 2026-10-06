@@ -48,6 +48,7 @@ flowchart LR
 - **Honest coverage:** percentages use product-source lines, mirroring `source_scope.rs` in `sourceScope.ts`: tests/support, config, hidden tooling, vendored and generated trees are excluded, while stylesheets and markup (CSS, SCSS, HTML) count as source. `sourceScope.isTestPath` is the one TypeScript test rule (`model.ts`'s `isTestNode` delegates to it), and `tests/source-scope-table.json` is a path table that the TypeScript suite and a Rust unit test both assert, so the two sides cannot drift silently. The CLI needs only a covered total, so it takes the union of actor modules; the web needs a part per file, so ownership is exclusive — the most specific module wins and the earlier actor wins ties. Every file counts once either way, so the covered total is the same. GitHub shows file counts because lines/imports are unavailable; truncated scans are marked partial and gap suggestions are caveated. [The scope contract](docs/writing-a-story.md#product-source-scope-and-checks) records the precise exclusions.
 - **Conservative gap hints:** walk uncovered product importers upstream, ignoring tests; an import of a directory stands for the files inside it. Suggest files only when all reached owning boundaries belong to one part and no unowned entry root exists. Cycles terminate; shared utilities and orphan cycles remain unassigned. Hints are facts to review, not automatic story edits.
 - **Declaration order:** Inside a part lists files by path and declarations exported first, then by line. It explicitly does not claim execution/call order. Tests are files that import the part; inline Rust tests do not become invented test files.
+- **All parts uses ELK only on demand:** a secondary toggle exposes the whole network for orientation. ELK layered placement uses role partitions and orthogonal routing; a fixed seed and input order make the adapter deterministic. Its code loads when All parts opens, keeping the default sequence fast. The large network scrolls inside the card.
 - **Hairline presentation:** shared light/dark tokens live in `ui/tokens.css`; React Hairline figures use those surfaces. People remain text, while other roles have documented figure defaults. Theme storage is guarded and system changes apply until a preference is saved; a `prefers-color-scheme` fallback in the tokens paints the right theme before React runs, so there is no light flash. The viewport allows pinch zoom (WCAG 1.4.4). Responsive layouts collapse the sidebar into top controls, reflow cards, and scroll the transit card internally on narrow screens.
 - **Repository access is read-only:** local scans read metadata and bounded text. GitHub fetches no source files or per-file summaries; a story read is capped at 256 KiB. Maps can travel as JSON snapshots and never execute the code they describe.
 
@@ -108,7 +109,7 @@ let json = codebase_atlas_lib::scan_json(std::path::Path::new("."), false)?;
 ## Interaction
 
 - The **Source** menu retains **Scan directory** and **Share** on desktop, **Computer** for companion connections, **GitHub URL**, and **Open/Save map**. Share exposes pairing QR/code and reachable addresses. **Share folder** adds a root; scanned folders are shared automatically. Computer accepts a host/code or pairing QR. iOS Camera can open a paired deep link.
-- **How it works** opens first as a journey sequence. Pick a written journey, use Prev/Play/Next or its ticks, and follow the carries/returns headline. Select a hop or participant header, or a part card, to inspect its exchanges, files and crossings. Dashed arrows are answers coming back. The sequence scrolls inside its card, with a vertical exchange list on phones. **Look inside** opens the selected part.
+- **How it works** opens first as a journey sequence. Pick a written journey, use Prev/Play/Next or its ticks, and follow the carries/returns headline. Select a hop or participant header, or a part card, to inspect its exchanges, files and crossings. Dashed arrows are answers coming back. The sequence scrolls inside its card, with a vertical exchange list on phones. Use **All parts** to explore the role-grouped network and select connections. **Look inside** opens the selected part.
 - **Where it lives** highlights the selected part in a file treemap. The legend's whole-number percentages count product source for each part that owns files, then **Not in the story**, which selects the gap and its suggestions. Choose another part, press the trace toggle to follow a written journey across each part’s largest file, select a tile, or browse every file. People and outside systems without files are named outside the trace.
 - **Inside a part** shows written Arrives/Leaves beside scanned files, declarations, crossings and importing tests. Choose a part from the part list (a disclosure, so long names wrap instead of truncating) or from its exchange and crossing links; a part without files shows only its written exchanges. Expand file rows to see their names and line numbers. File links take the selection to Where it lives.
 - A missing story explains `atlas story brief` and `atlas story check`; Where it lives still shows the files. GitHub maps explicitly explain the lack of imports, declarations and line counts. Warnings remain visible.
@@ -177,7 +178,8 @@ src/
   treemap.ts              weighted-volume and squarified packing utilities
   SequenceView.tsx         sticky participant columns, exchange rows and phone list
   sequenceLayout.ts       first-visit columns and rows sized to full sentences
-  transitLayout.ts        legacy whole-network layout helper
+  AllPartsView.tsx        lazy whole-network view and connection inspection
+  elkLayout.ts            deterministic ELK layered/orthogonal adapter
   journey.ts              journey hops, flow keys and label wrapping
   partDeclarations.ts     exported-first declaration ordering
   storyFigures.ts         figure catalogue and role defaults
@@ -215,3 +217,5 @@ docs/
 ## Credits
 
 The part figures come from [`@lucasmarkes/hairline`](https://www.npmjs.com/package/@lucasmarkes/hairline) 0.3.0, MIT © Lucas Marques. Geist, Geist Mono and Instrument Serif are self-hosted through `@fontsource/geist`, `@fontsource/geist-mono` and `@fontsource/instrument-serif`, imported in `src/main.tsx`, under the SIL Open Font License 1.1.
+
+All-parts layout uses [`elkjs`](https://github.com/kieler/elkjs) **0.12.0**, licensed here under **EPL-2.0**. It is loaded separately from the initial application bundle.

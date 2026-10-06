@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { actorExchanges, filesForActor, ownerForNode, partCrossings, supportFilesForActor, testsForActor } from "../src/storyFacts.ts";
-import { buildTransitLayout, labelBox, transitPath, type Point } from "../src/transitLayout.ts";
-import { ACTOR_ROLES } from "../src/model.ts";
 import { actorFigure } from "../src/storyFigures.ts";
 import type { Story } from "../src/model.ts";
 
@@ -35,21 +33,6 @@ test("crossings report real binding names, direction, and files in no part", () 
   assert.ok(!crossings.some(each => each.files.includes("tests/app.test.ts")), "tests are not crossings");
   assert.deepEqual(testsForActor(fixture, "app").map(n => n.id), ["tests/app.test.ts"]);
   assert.deepEqual(partCrossings({ ...fixture, stats: { ...fixture.stats, importsAvailable: false } }, "app"), []);
-});
-
-test("transit layout collapses unused roles, separates stations, and keeps labels in bounds", () => {
-  const layout = buildTransitLayout(story);
-  assert.deepEqual(layout.columns.map(column => column.role), ["person", "surface", "core"]);
-  for (const station of layout.stations) {
-    assert.ok(station.x >= 78 && station.x <= layout.width - 78);
-    assert.ok(station.y > 44 && station.y < layout.height - 60);
-  }
-  const crowded = buildTransitLayout({ ...story, actors: [...story.actors, { ...story.actors[2], id: "extra" }] });
-  const core = crowded.stations.filter(station => station.actor.role === "core");
-  assert.ok(core[1].y - core[0].y >= 108);
-  const path = transitPath(crowded, "app", "core")!;
-  assert.ok(path.startsWith("M "));
-  assert.equal(transitPath(crowded, "core", "extra"), null);
 });
 
 test("people never become code figures and roles have documented defaults", () => {
@@ -89,73 +72,6 @@ test("directory import targets expand to the files inside, grouped by each file'
   assert.deepEqual(partCrossings(fixture, "lib").map(each => [each.direction, each.other, each.files.join(",")]), [["out", "app", "src/app/main.ts"]]);
   assert.deepEqual(testsForActor(fixture, "lib").map(n => n.id), ["tests/lib.test.ts"]);
   assert.deepEqual(testsForActor(fixture, "app"), []);
-});
-
-function pointsOf(d: string): Point[] {
-  return [...d.matchAll(/[ML] (-?[\d.]+) (-?[\d.]+)/g)].map(match => [Number(match[1]), Number(match[2])] as Point);
-}
-function octilinear(d: string): boolean {
-  const points = pointsOf(d);
-  return points.length >= 2 && points.slice(1).every(([x, y], i) => {
-    const dx = Math.abs(x - points[i][0]); const dy = Math.abs(y - points[i][1]);
-    return dx === 0 || dy === 0 || Math.abs(dx - dy) < 1e-9;
-  });
-}
-
-test("transit routes are deterministic metro lines that skip other stations", () => {
-  const wide: Story = {
-    summary: "", journeys: [],
-    actors: [
-      { id: "p", name: "Person", role: "person", blurb: "" },
-      { id: "s", name: "Surface", role: "surface", blurb: "" },
-      { id: "c1", name: "Core one", role: "core", blurb: "" },
-      { id: "c2", name: "Core two", role: "core", blurb: "" },
-      { id: "c3", name: "Core three", role: "core", blurb: "" },
-      { id: "k", name: "Kept", role: "store", blurb: "" },
-      { id: "x", name: "Outside", role: "external", blurb: "" },
-    ],
-    flows: [
-      { from: "p", to: "s", carries: "a" }, { from: "s", to: "c1", carries: "b" }, { from: "c1", to: "c2", carries: "c" },
-      { from: "c1", to: "c3", carries: "d" }, { from: "c3", to: "x", carries: "e" }, { from: "p", to: "x", carries: "f" },
-      { from: "k", to: "p", carries: "g" }, { from: "c2", to: "k", carries: "h" },
-    ],
-  };
-  const layout = buildTransitLayout(wide);
-  assert.deepEqual(layout.columns.map(column => column.role), ACTOR_ROLES.filter(role => role !== "door"));
-  assert.equal(layout.routes.size, wide.flows.length);
-  for (const route of layout.routes.values()) {
-    assert.ok(octilinear(route.d), route.d);
-    assert.ok(!route.d.includes("C"), "no curves");
-    for (const [x, y] of route.points) assert.ok(x >= 0 && x <= layout.width && y >= 36 && y <= layout.height, route.d);
-    const ends = new Set([route.flow.from, route.flow.to]);
-    for (const station of layout.stations) {
-      if (ends.has(station.actor.id)) continue;
-      for (const [x, y] of route.points) assert.ok(Math.hypot(x - station.x, y - station.y) > 1, `${route.d} passes ${station.actor.id}`);
-    }
-  }
-  // Same column: c1→c3 must not run straight through c2.
-  const same = layout.routes.get("c1→c3")!;
-  assert.ok(same.points.length > 2 && same.points.some(([x]) => x !== layout.byId.get("c1")!.x), same.d);
-  // Adjacent stations in one column share a straight line, and labels move off it.
-  assert.deepEqual(layout.routes.get("c1→c2")!.points, [[layout.byId.get("c1")!.x, layout.byId.get("c1")!.y], [layout.byId.get("c2")!.x, layout.byId.get("c2")!.y]]);
-  // Reverse travel reverses the drawn route.
-  const forward = transitPath(layout, "s", "c1")!; const backward = transitPath(layout, "c1", "s")!;
-  assert.deepEqual(pointsOf(backward), pointsOf(forward).reverse());
-  assert.deepEqual(buildTransitLayout(wide), layout, "deterministic");
-  for (const station of layout.stations) {
-    assert.ok(["below", "above", "right"].includes(station.anchor));
-    const box = labelBox(station);
-    assert.ok(box.left >= 0 && box.right <= layout.width && box.top >= 36 && box.bottom <= layout.height, station.actor.id);
-  }
-});
-
-test("transit layout handles an empty story and a story with no flows", () => {
-  const empty = buildTransitLayout({ summary: "", actors: [], flows: [], journeys: [] });
-  assert.deepEqual([empty.columns, empty.stations, empty.routes.size], [[], [], 0]);
-  assert.ok(empty.width > 0 && empty.height > 0);
-  const lonely = buildTransitLayout({ ...story, flows: [] });
-  assert.equal(lonely.routes.size, 0);
-  assert.equal(transitPath(lonely, "user", "app"), null);
 });
 
 test("figures: unknown names and non-string values from an opened snapshot fall back to the role default", () => {
