@@ -1,7 +1,7 @@
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import type { RepositoryGraph, StoryActor } from "./model";
 import {
-  BOARD, GAP_ID, buildOverviewLayout, crossingLabel, elbow, fitCamera, layoutBounds, groundTextMatrix, isoBox, isoDepth, isoProject,
+  BOARD, GAP_ID, buildOverviewLayout, crossingLabel, elbow, fitCamera, layoutBounds, groundTextMatrix, isoBlock, isoBox, isoDepth, isoProject,
   openPath, pointAlong, placeLabels, plateLabel, quarterAzimuth, rectCenter,
   type IsoCamera, type OverviewLayout, type Point,
 } from "./overview";
@@ -13,7 +13,7 @@ import { useReducedMotion } from "./ui/useReducedMotion";
 export function OverviewHeading({ graph }: { graph: RepositoryGraph }) {
   return <>
     <h1>The whole codebase, <em>from above</em>.</h1>
-    <p className="atlas-intro">Each part of the story is a district; each pillar a file, as tall as its lines. Rails join parts that import each other or exchange data in the story. Point at a part to see its connections.{graph.story ? "" : " This repository has no story yet, so every file sits in the hatched lot."}</p>
+    <p className="atlas-intro">Each part of the story is a district; each block a file, taller for more lines. Rails join parts that import each other or exchange data in the story. Point at a part to see its connections.{graph.story ? "" : " This repository has no story yet, so every file sits in the hatched lot."}</p>
   </>;
 }
 
@@ -29,6 +29,8 @@ const ease = (t: number) => {
   return 3 * (1 - u) ** 2 * u * .72 + 3 * (1 - u) * u * u + u ** 3;
 };
 const LABEL_FONT = 17;
+/** Past this zoom every part's blocks stand at full height. */
+const DETAIL_ZOOM = 1.8;
 const FIGURE = 1.45;
 /** How far above its pad centre a figure's box starts, as a share of its width:
  *  Hairline draws a figure's foot at about two thirds of its 5:4 box. */
@@ -48,17 +50,20 @@ function cachedLayout(graph: RepositoryGraph): OverviewLayout {
 
 type Hover = { kind: "part"; id: string } | { kind: "file"; id: string } | null;
 
-/** The static board: ground, plates, rails, pillars and markers, painted back
- *  to front for one azimuth. It does not change on hover; highlight is a
- *  stylesheet over its data attributes, so pointing costs no repaint here. */
-const Board = memo(function Board({ layout, cam, hatch, names }: { layout: OverviewLayout; cam: IsoCamera; hatch: string; names: Map<string, string> }) {
+/** The static board: ground, plates, rails, blocks and markers, painted back
+ *  to front for one azimuth. Highlight is a stylesheet over its data
+ *  attributes; the board repaints only when the raised part changes (blocks
+ *  rest pressed down and rise to full height for the part in focus, or for
+ *  every part once zoomed in). */
+const Board = memo(function Board({ layout, cam, hatch, names, raised, detail }: { layout: OverviewLayout; cam: IsoCamera; hatch: string; names: Map<string, string>; raised: string | null; detail: boolean }) {
   const ground = isoBox(cam, { x: 0, y: 0, width: BOARD, height: BOARD }, -14, 0);
   const showLabels = cam.scale * LABEL_FONT >= 7;
   const items: { depth: number; node: ReactNode }[] = [];
   for (const district of layout.districts) for (const pillar of district.pillars) {
     const half = pillar.size / 2;
-    const box = isoBox(cam, { x: pillar.x - half, y: pillar.y - half, width: pillar.size, height: pillar.size }, 3, 3 + pillar.height);
-    const top = isoProject(cam, pillar.x, pillar.y, 3 + pillar.height);
+    const height = detail || district.id === raised ? pillar.height : pillar.rest;
+    const box = isoBlock(cam, { x: pillar.x - half, y: pillar.y - half, width: pillar.size, height: pillar.size }, 3, 3 + height);
+    const top = isoProject(cam, pillar.x, pillar.y, 3 + height);
     items.push({ depth: isoDepth(cam.az, pillar.x + half, pillar.y + half), node: <g key={pillar.id} className={`ov-pillar${pillar.aggregate ? " is-crate" : ""}`} data-part={district.id} data-pillar={pillar.id}>
       <path className="ov-sil" d={box.silhouette} /><path className="ov-crease" d={box.crease} />
       {pillar.aggregate && <ellipse className="ov-dot" cx={top[0]} cy={top[1]} rx={Math.max(1, cam.scale * 2.4)} ry={Math.max(.5, cam.scale * 1.2)} />}
@@ -87,7 +92,7 @@ const Board = memo(function Board({ layout, cam, hatch, names }: { layout: Overv
     {layout.connections.map(connection => <path key={connection.key} className="ov-rail" data-a={connection.a} data-b={connection.b} d={openPath(connection.rail.map(([x, y]) => isoProject(cam, x, y, 0)))} />)}
     {items.map(item => item.node)}
     {/* Names lie flat on each plate's near edge, painted last with a halo so a
-        pillar in front never cuts through them: an annotation, not a solid. */}
+        block in front never cuts through them: an annotation, not a solid. */}
     {showLabels && layout.districts.map(district => {
       const { axes, origin, room } = plateLabel(cam.az, district.plate);
       const name = names.get(district.id) ?? district.name;
@@ -156,6 +161,9 @@ export default function OverviewView({ graph, theme, pickedId, onSelectActor, on
 
   const focusPart = hover?.kind === "part" ? hover.id : hover?.kind === "file" ? null : keyFocus ?? pickedId;
   const focusFile = hover?.kind === "file" ? hover.id : null;
+  // The part whose blocks rise: the one in focus, or the one whose block is pointed at.
+  const raisedPart = focusPart ?? (focusFile ? layout.pillars.get(focusFile)?.district ?? null : null);
+  const detail = view.zoom >= DETAIL_ZOOM;
   const links = useMemo(() => focusPart ? layout.connections.filter(each => each.a === focusPart || each.b === focusPart) : [], [layout, focusPart]);
   const related = useMemo(() => new Set(focusPart ? [focusPart, ...links.map(each => each.a === focusPart ? each.b : each.a)] : []), [focusPart, links]);
 
@@ -337,7 +345,7 @@ export default function OverviewView({ graph, theme, pickedId, onSelectActor, on
           <div className={`ov-stage${focusPart || filePillar ? " is-focus" : ""}`} style={stageStyle}>
             <svg className="ov-board" width={width} height={camera.height} viewBox={`0 0 ${width} ${camera.height}`} aria-hidden="true">
               <defs><pattern id={hatch} width="6" height="6" patternUnits="userSpaceOnUse"><path d="M-1 1 L1 -1 M0 6 L6 0 M5 7 L7 5" stroke="var(--graphic)" strokeWidth=".6" /></pattern></defs>
-              <Board layout={layout} cam={cam} hatch={hatch} names={names} />
+              <Board layout={layout} cam={cam} hatch={hatch} names={names} raised={raisedPart} detail={detail} />
             </svg>
             <div className="ov-figures" aria-hidden="true">
               {figures.map(({ actor, district, sx, sy }) => <div key={district.id} className="ov-figure" data-part={district.id} style={{ left: sx - figureWidth / 2, top: sy - figureWidth * FIGURE_LIFT, width: figureWidth }}>
@@ -373,7 +381,7 @@ export default function OverviewView({ graph, theme, pickedId, onSelectActor, on
           </div>;
           return narrow ? <details className="overview-parts-fold"><summary>Parts on the board <span className="atlas-mono atlas-muted">{chips.length}</span></summary>{list}</details> : list;
         })()}
-        <p className="atlas-muted overview-key">Pillar height is lines (square root). Rails: imports and written flows between parts. Drag to pan; pinch or Ctrl/⌘-scroll to zoom.</p>
+        <p className="atlas-muted overview-key">Blocks rest low; point at a part or zoom in and its blocks rise to full height, log of lines, capped. Rails: imports and written flows between parts. Drag to pan; pinch or Ctrl/⌘-scroll to zoom.</p>
       </div>
     </section>
     {picked && <OverviewPick actor={picked} district={pickedDistrict} links={pickedLinks} nameOf={nameOf} graph={graph} journeys={journeys} onNavigate={onNavigate} onFollowJourney={onFollowJourney} onSelectActor={onSelectActor} />}

@@ -15,10 +15,21 @@ export const EDGE = 90;
 export const GAP_ID = "__gap__";
 const STREET = 28;
 const MARGIN = 20;
-const PITCH = 18;
-const PILLAR = 9;
-const CRATE = 14;
-export const HEIGHT_MAX = 110;
+/** Blocks sit on a grid like Hairline's Terrain: a 14-unit cell holding an
+ *  11-unit rounded block, so neighbours read as one surface, not sticks. */
+export const PITCH = 14;
+export const BLOCK = 11;
+const CRATE = 12;
+/** Clear ground between the figure's pad and the first ring of blocks. */
+const PLAZA_GAP = 8;
+/** Full block height: about a figure's base, never towering over it. */
+export const HEIGHT_MAX = 22;
+export const HEIGHT_MIN = 3;
+/** At rest every block is pressed down to this share of its full height. */
+export const REST_SHARE = 0.45;
+/** Files under this many lines are too small to read as a block; they join
+ *  the part's crate. */
+export const SMALL_LINES = 20;
 export const MAX_PILLARS = 360;
 
 export type Point = [number, number];
@@ -108,6 +119,42 @@ export function isoBox(cam: IsoCamera, rect: Rect, z0: number, z1: number) {
   return { silhouette: closedPath(convexHull(top.concat(base))), crease: openPath(crease), top: closedPath(top) };
 }
 
+/** A rounded rectangle's outline on the ground, counter-clockwise from its
+ *  first corner's arc, `steps` segments per corner. */
+export function roundedRing(rect: Rect, radius: number, steps = 3): Point[] {
+  const r = Math.max(0, Math.min(radius, rect.width / 2, rect.height / 2));
+  const x0 = rect.x, y0 = rect.y, x1 = rect.x + rect.width, y1 = rect.y + rect.height;
+  const centres: [number, number, number][] = [[x1 - r, y1 - r, 0], [x0 + r, y1 - r, 90], [x0 + r, y0 + r, 180], [x1 - r, y0 + r, 270]];
+  const ring: Point[] = [];
+  for (const [cx, cy, start] of centres) for (let k = 0; k <= steps; k += 1) {
+    const a = (start + 90 * k / steps) * Math.PI / 180;
+    ring.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
+  }
+  return ring;
+}
+
+/** A Terrain-style block: a rounded prism whose silhouette is the hull of its
+ *  top and base, with one crease along the near run of a slightly inset top. */
+export function isoBlock(cam: IsoCamera, rect: Rect, z0: number, z1: number, radius = 1.6, bevel = 0.7) {
+  const ring = roundedRing(rect, radius);
+  const sil = convexHull(ring.map(([x, y]) => isoProject(cam, x, y, z1)).concat(ring.map(([x, y]) => isoProject(cam, x, y, z0))));
+  const inner = roundedRing({ x: rect.x + bevel, y: rect.y + bevel, width: rect.width - bevel * 2, height: rect.height - bevel * 2 }, Math.max(0.3, radius - bevel));
+  const projected = inner.map(([x, y]) => isoProject(cam, x, y, z1));
+  // The near run: from the leftmost to the rightmost screen point, the way
+  // round that passes the point nearest the viewer.
+  let left = 0, right = 0, near = 0;
+  projected.forEach((p, i) => {
+    if (p[0] < projected[left][0]) left = i;
+    if (p[0] > projected[right][0]) right = i;
+    if (isoDepth(cam.az, inner[i][0], inner[i][1]) > isoDepth(cam.az, inner[near][0], inner[near][1])) near = i;
+  });
+  const n = projected.length, run: Point[] = [];
+  const within = (from: number, to: number, i: number) => ((i - from + n) % n) <= ((to - from + n) % n);
+  const [a, b] = within(left, right, near) ? [left, right] : [right, left];
+  for (let i = a; ; i = (i + 1) % n) { run.push(projected[i]); if (i === b) break; }
+  return { silhouette: closedPath(sil), crease: openPath(run) };
+}
+
 export interface GroundAxes { read: Point; down: Point }
 
 /** World unit vectors for text lying on the ground along one world axis:
@@ -150,7 +197,10 @@ export interface OverviewPillar {
   x: number;
   y: number;
   size: number;
+  /** Full height, shown when its part is pointed at or the board is zoomed in. */
   height: number;
+  /** Height at rest: the same order, pressed into a gentle terrain. */
+  rest: number;
   weight: number;
   aggregate: boolean;
 }
@@ -193,7 +243,7 @@ export interface OverviewLayout {
   padSize: number;
   /** file id → imported product file ids. */
   fileImports: Map<string, string[]>;
-  /** file id → pillar id (aggregated files map to their district's crate). */
+  /** file id → block id (aggregated files map to their district's crate). */
   pillarOfFile: Map<string, string>;
   pillars: Map<string, OverviewPillar>;
   totalFiles: number;
@@ -244,13 +294,14 @@ export function buildOverviewLayout(graph: RepositoryGraph, maxPillars = MAX_PIL
   // A uniform figure pad, sized so every lot can hold one.
   const n = Math.max(1, districtIds.length);
   const padSize = Math.max(48, Math.min(120, Math.sqrt(BOARD * BOARD / n) * 0.34));
-  // Room for the pad, the label strip and two rings of pillars around it.
-  const lotFloor = (padSize + MARGIN * 2 + STREET + PITCH * 4) ** 2;
+  // Room for the pad, the label strip and two rings of blocks around it.
+  const lotFloor = (padSize + MARGIN * 2 + STREET + PLAZA_GAP * 2 + PITCH * 4) ** 2;
   const areas = flooredAreas(weights, BOARD * BOARD, lotFloor);
   const lots = packTreemap(districtIds.map((id, i) => ({ id, area: areas[i] })), BOARD, BOARD);
 
   const maxWeight = Math.max(1, ...product.map(weightOf));
-  const heightOf = (weight: number) => Math.max(4, HEIGHT_MAX * Math.sqrt(weight / maxWeight));
+  const heightOf = blockHeight(maxWeight);
+  const small = (file: RepositoryNode) => weightOf(file) < SMALL_LINES;
   const totalFiles = product.length;
   const pillars = new Map<string, OverviewPillar>();
   const pillarOfFile = new Map<string, string>();
@@ -262,30 +313,32 @@ export function buildOverviewLayout(graph: RepositoryGraph, maxPillars = MAX_PIL
     const [cx, cy] = rectCenter(plate);
     const side = Math.min(padSize, plate.width - MARGIN * 2, plate.height - MARGIN * 2);
     const pad = { x: cx - side / 2, y: cy - side / 2, width: Math.max(0, side), height: Math.max(0, side) };
-    const keepOut = inset(pad, -PITCH);
     const field = inset(plate, MARGIN);
-    // The block's cells in snake order along its longer side, around a plaza
-    // where the figure stands. Shown files go down that path in path order,
-    // so neighbouring pillars are neighbouring files, spread evenly over the
-    // block when there are fewer files than cells.
-    const cells = blockCells(field, keepOut);
+    // Cells ring the plaza where the figure stands, nearest first. The largest
+    // files take the inner rings, so a part reads as one compact rise around
+    // its figure that falls away outward: no stragglers at the plate's edge.
+    // The hatched lot has no figure: its blocks gather round its centre.
+    const cells = plazaCells(field, id === GAP_ID ? { x: cx, y: cy, width: 0, height: 0 } : pad);
     const files = [...groups.get(id)!].sort((a, b) => weightOf(b) - weightOf(a) || a.id.localeCompare(b.id));
+    const readable = files.filter(file => !small(file)).length;
     const quota = Math.max(1, Math.round(maxPillars * files.length / Math.max(1, totalFiles)));
     const slots = Math.min(cells.length, quota, files.length);
-    const aggregate = files.length > slots && slots > 0;
-    const singles = aggregate ? slots - 1 : slots;
-    const shown = files.slice(0, singles).sort((a, b) => a.id.localeCompare(b.id));
-    const cellAt = (i: number) => cells[Math.min(cells.length - 1, Math.floor((i + 0.5) * cells.length / Math.max(1, slots)))];
+    const singles = Math.min(readable, files.length > slots ? slots - 1 : slots);
+    const shown = files.slice(0, Math.max(0, singles));
     const list: OverviewPillar[] = [];
+    const block = (cell: Point, size: number) => ({ x: cell[0], y: cell[1], size });
     shown.forEach((file, i) => {
-      const [x, y] = cellAt(i);
-      list.push({ id: file.id, district: id, fileIds: [file.id], x, y, size: PILLAR, height: heightOf(weightOf(file)), weight: weightOf(file), aggregate: false });
+      const height = heightOf(weightOf(file));
+      list.push({ id: file.id, district: id, fileIds: [file.id], ...block(cells[i], BLOCK), height, rest: restHeight(height), weight: weightOf(file), aggregate: false });
     });
-    if (aggregate || (slots === 0 && files.length)) {
-      const rest = files.slice(singles);
-      const at = cells.length ? cellAt(singles) : [pad.x + pad.width, pad.y + pad.height];
+    const rest = files.slice(shown.length);
+    if (rest.length) {
+      // The crate takes the next cell; with no cell free it sits in the
+      // field's nearest corner to the plaza, still clear of every edge.
+      const at: Point = cells[shown.length] ?? [Math.max(field.x + CRATE / 2, Math.min(field.x + field.width - CRATE / 2, pad.x - CRATE / 2)), Math.max(field.y + CRATE / 2, Math.min(field.y + field.height - CRATE / 2, pad.y - CRATE / 2))];
       const weight = rest.reduce((sum, file) => sum + weightOf(file), 0);
-      list.push({ id: `${id}::rest`, district: id, fileIds: rest.map(file => file.id), x: at[0], y: at[1], size: CRATE, height: heightOf(weight / rest.length), weight, aggregate: true });
+      const height = Math.max(HEIGHT_MIN, heightOf(weight / rest.length));
+      list.push({ id: `${id}::rest`, district: id, fileIds: rest.map(file => file.id), ...block(at, CRATE), height, rest: restHeight(height), weight, aggregate: true });
     }
     for (const pillar of list) {
       pillars.set(pillar.id, pillar);
@@ -357,23 +410,40 @@ export function buildOverviewLayout(graph: RepositoryGraph, maxPillars = MAX_PIL
   };
 }
 
-/** Grid cell centres inside `field`, outside `keepOut`, in snake order with
- *  rows running along the field's longer side. */
-export function blockCells(field: Rect, keepOut: Rect): Point[] {
-  const across = field.width >= field.height;
-  const us: number[] = [], vs: number[] = [];
-  const along = across ? field.width : field.height, side = across ? field.height : field.width;
-  const u0 = across ? field.x : field.y, v0 = across ? field.y : field.x;
-  for (let u = PITCH / 2; u <= along - PITCH / 2 + 1e-6; u += PITCH) us.push(u0 + u);
-  for (let v = PITCH / 2; v <= side - PITCH / 2 + 1e-6; v += PITCH) vs.push(v0 + v);
-  const cells: Point[] = [];
-  vs.forEach((v, row) => {
-    for (const u of row % 2 ? [...us].reverse() : us) {
-      const [x, y] = across ? [u, v] : [v, u];
-      if (!contains(keepOut, x, y)) cells.push([x, y]);
-    }
-  });
-  return cells;
+/** Full block height for a file's weight: logarithmic from SMALL_LINES
+ *  (HEIGHT_MIN) to the largest file (HEIGHT_MAX), so it is monotonic and
+ *  capped, and a 5,000-line file stands only a few times a 50-line one. */
+export function blockHeight(maxWeight: number): (weight: number) => number {
+  const span = Math.log(Math.max(SMALL_LINES * 2, maxWeight) / SMALL_LINES);
+  return weight => HEIGHT_MIN + (HEIGHT_MAX - HEIGHT_MIN) * Math.max(0, Math.min(1, Math.log(Math.max(1, weight) / SMALL_LINES) / span));
+}
+
+export const restHeight = (height: number) => Math.max(1.5, height * REST_SHARE);
+
+/** Grid cell centres around the plaza, nearest ring first and clockwise
+ *  within a ring. The grid is centred on the pad, and a cell is kept only if
+ *  its whole block (CRATE, the larger) lies inside `field` and clear of the
+ *  pad by PLAZA_GAP. */
+export function plazaCells(field: Rect, pad: Rect): Point[] {
+  const [cx, cy] = rectCenter(pad);
+  const half = CRATE / 2, reachX = pad.width / 2 + PLAZA_GAP, reachY = pad.height / 2 + PLAZA_GAP;
+  // Of the two symmetric grids (a cell on the pad's centre line, or a street
+  // on it), take the one whose first ring hugs the plaza closest.
+  const waste = (o: number) => { const edge = reachX + half - o; return Math.ceil(edge / PITCH - 1e-9) * PITCH - edge; };
+  const offset = waste(0) <= waste(PITCH / 2) ? 0 : PITCH / 2;
+  const cells: { p: Point; ring: number; angle: number }[] = [];
+  const steps = (lo: number, hi: number, c: number) => {
+    const out: number[] = [];
+    for (let v = c + offset - Math.ceil((c - lo) / PITCH + 1) * PITCH; v <= hi; v += PITCH) if (v - half >= lo - 1e-6 && v + half <= hi + 1e-6) out.push(v);
+    return out;
+  };
+  for (const x of steps(field.x, field.x + field.width, cx)) for (const y of steps(field.y, field.y + field.height, cy)) {
+    const dx = Math.abs(x - cx) - reachX - half, dy = Math.abs(y - cy) - reachY - half;
+    if (dx < -1e-6 && dy < -1e-6) continue;
+    const ring = Math.max(0, Math.floor(Math.max(dx, dy) / PITCH + 1e-6));
+    cells.push({ p: [x, y], ring, angle: Math.atan2(y - cy, x - cx) });
+  }
+  return cells.sort((a, b) => a.ring - b.ring || a.angle - b.angle).map(cell => cell.p);
 }
 
 /** People and outside services stand just off the plate, on the side nearest

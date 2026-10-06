@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { graph, node, story } from "./story-fixtures.ts";
 import {
-  BOARD, GAP_ID, blockCells, buildOverviewLayout, convexHull, crossingLabel, elbow, fitCamera, flooredAreas, groundAxes,
+  BOARD, BLOCK, GAP_ID, HEIGHT_MAX, HEIGHT_MIN, SMALL_LINES, blockHeight, buildOverviewLayout, isoBlock, plazaCells, restHeight, convexHull, crossingLabel, elbow, fitCamera, flooredAreas, groundAxes,
   isoDepth, isoProject, layoutBounds, perimeterParam, perimeterPoint, placeLabels, plateLabel, pointAlong, quarterAzimuth, simplify,
   type IsoCamera,
 } from "../src/overview.ts";
@@ -75,13 +75,39 @@ test("floored areas give small parts room for a figure and still sum to the boar
   assert.deepEqual(flooredAreas([], 100, 10), []);
 });
 
-test("block cells snake along the longer side and skip the plaza", () => {
-  const cells = blockCells({ x: 0, y: 0, width: 90, height: 36 }, { x: 30, y: 0, width: 20, height: 36 });
-  assert.ok(cells.every(([x]) => x < 30 || x > 50));
-  // Row one runs left to right, row two comes back.
-  assert.ok(cells[0][0] < cells[1][0]);
-  const second = cells.filter(([, y]) => y > 18);
-  assert.ok(second[0][0] > second[second.length - 1][0]);
+test("plaza cells ring the pad, nearest first, and stay inside the field", () => {
+  const field = { x: 0, y: 0, width: 200, height: 140 }, pad = { x: 70, y: 40, width: 60, height: 60 };
+  const cells = plazaCells(field, pad);
+  assert.ok(cells.length > 20);
+  const half = 6;
+  const gapTo = ([x, y]: [number, number]) => Math.max(Math.abs(x - 100) - 30, Math.abs(y - 70) - 30) - half;
+  for (const [x, y] of cells) {
+    assert.ok(x - half >= field.x && x + half <= field.x + field.width && y - half >= field.y && y + half <= field.y + field.height, "inside the field");
+    assert.ok(gapTo([x, y]) >= 8 - 1e-6, "clear of the pad");
+  }
+  // Nearest ring first: the ring index (whole cells beyond the plaza gap) never falls.
+  const ring = (p: [number, number]) => Math.floor((gapTo(p) - 8) / 14 + 1e-6);
+  for (let i = 1; i < cells.length; i += 1) assert.ok(ring(cells[i]) >= ring(cells[i - 1]));
+  assert.ok(gapTo(cells[0]) < 14, "the first ring hugs the plaza");
+});
+
+test("block heights are monotonic and capped, and rest lower", () => {
+  const height = blockHeight(6000);
+  let last = -Infinity;
+  for (const w of [1, 10, SMALL_LINES, 30, 80, 200, 900, 3000, 6000, 50000]) {
+    const h = height(w);
+    assert.ok(h >= last, `monotonic at ${w}`);
+    assert.ok(h >= HEIGHT_MIN && h <= HEIGHT_MAX, `capped at ${w}`);
+    assert.ok(restHeight(h) < h);
+    last = h;
+  }
+  assert.equal(height(6000), HEIGHT_MAX);
+  assert.equal(height(SMALL_LINES), HEIGHT_MIN);
+  assert.ok(height(3000) > height(200));
+  // Strongly compressed: a hundredfold larger file is not a hundredfold taller.
+  assert.ok(height(6000) / height(60) < 4);
+  const box = isoBlock(cam(45), { x: 0, y: 0, width: 11, height: 11 }, 0, 10);
+  assert.ok(box.silhouette.startsWith("M") && box.crease.startsWith("M"));
 });
 
 test("perimeter parameters round-trip to the nearest board edge", () => {
@@ -133,7 +159,7 @@ test("districts are parts that own product source, plus the hatched gap; people 
   assert.ok(m.x < 0 || m.y < 0 || m.x > BOARD || m.y > BOARD);
 });
 
-test("pillars are capped: the largest files stand, the rest stack in one crate per part", () => {
+test("blocks are capped: the largest files stand, small and overflow files stack in one crate per part", () => {
   const layout = buildOverviewLayout(fixture(), 12);
   const app = layout.districts.find(d => d.id === "app")!;
   const crate = app.pillars.find(p => p.aggregate)!;
@@ -144,15 +170,45 @@ test("pillars are capped: the largest files stand, the rest stack in one crate p
   const smallestShown = Math.min(...singles.map(p => p.weight));
   assert.ok(crate.fileIds.every(id => Number(id.match(/f(\d+)/)![1]) * 5 + 10 <= smallestShown));
   assert.ok(layout.pillars.size <= 12 + layout.districts.length);
-  // Every product file maps to the pillar that stands for it.
+  // Every product file maps to the block that stands for it.
   for (const d of layout.districts) for (const p of d.pillars) for (const f of p.fileIds) assert.equal(layout.pillarOfFile.get(f), p.id);
-  // Taller is more lines, and pillars stay inside their plate, off the pad.
-  for (const p of singles) {
-    assert.ok(p.x > app.plate.x && p.x < app.plate.x + app.plate.width && p.y > app.plate.y && p.y < app.plate.y + app.plate.height);
-    assert.ok(!(p.x > app.pad.x && p.x < app.pad.x + app.pad.width && p.y > app.pad.y && p.y < app.pad.y + app.pad.height));
-  }
   const byWeight = [...singles].sort((a, b) => a.weight - b.weight);
   assert.ok(byWeight[0].height <= byWeight[byWeight.length - 1].height);
+});
+
+test("files too small to read join the crate, even with room to spare", () => {
+  const layout = buildOverviewLayout(fixture());
+  const app = layout.districts.find(d => d.id === "app")!;
+  const crate = app.pillars.find(p => p.aggregate)!;
+  // f00 (10 lines) and f01 (15) are under SMALL_LINES.
+  assert.deepEqual([...crate.fileIds].sort(), ["src/app/f00.ts", "src/app/f01.ts"]);
+  assert.ok(app.pillars.filter(p => !p.aggregate).every(p => p.weight >= SMALL_LINES));
+  // A part of only small files is just its crate.
+  const gap = layout.districts.find(d => d.id === GAP_ID)!;
+  assert.ok(gap.pillars.every(p => p.aggregate || p.weight >= SMALL_LINES));
+});
+
+test("no block leaves its plate's field, touches the pad, or exceeds the cap", () => {
+  for (const max of [12, 360]) {
+    const layout = buildOverviewLayout(fixture(), max);
+    for (const d of layout.districts) for (const p of d.pillars) {
+      const half = p.size / 2;
+      // Inside the plate with the label margin to spare, so nothing stands on a border.
+      assert.ok(p.x - half >= d.plate.x + 20 - 1e-6 && p.x + half <= d.plate.x + d.plate.width - 20 + 1e-6, `${p.id} x inside`);
+      assert.ok(p.y - half >= d.plate.y + 20 - 1e-6 && p.y + half <= d.plate.y + d.plate.height - 20 + 1e-6, `${p.id} y inside`);
+      const clear = p.x + half <= d.pad.x || p.x - half >= d.pad.x + d.pad.width || p.y + half <= d.pad.y || p.y - half >= d.pad.y + d.pad.height;
+      // The hatched lot has no figure, so its blocks may gather on its pad.
+      assert.ok(clear || d.id === GAP_ID, `${p.id} off the pad`);
+      assert.ok(p.height <= HEIGHT_MAX && p.rest < p.height);
+      if (!p.aggregate) assert.equal(p.size, BLOCK);
+    }
+    // Blocks never overlap one another.
+    const all = layout.districts.flatMap(d => d.pillars);
+    for (let i = 0; i < all.length; i += 1) for (let j = i + 1; j < all.length; j += 1) {
+      const a = all[i], b = all[j];
+      assert.ok(Math.abs(a.x - b.x) * 2 >= a.size + b.size - 1e-6 || Math.abs(a.y - b.y) * 2 >= a.size + b.size - 1e-6, `${a.id} vs ${b.id}`);
+    }
+  }
 });
 
 test("connections aggregate product imports between parts and written flows", () => {
