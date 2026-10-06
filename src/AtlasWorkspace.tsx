@@ -6,12 +6,16 @@ import { ExchangeList } from "./PartDetails";
 import TerritoryView, { TerritoryHeading } from "./TerritoryView";
 import { storyCoverage } from "./territory";
 import JourneyView, { JourneyHeading } from "./JourneyView";
+import OverviewView, { OverviewHeading } from "./OverviewView";
+import { GAP_ID } from "./overview";
 import type { Theme } from "./ui/useTheme";
 import { journeyHops } from "./journey";
 
+export type AtlasView = "overview" | "story" | "territory" | "part";
+
 export interface AtlasWorkspaceProps {
-  view: "story" | "territory" | "part";
-  onNavigate: (view: "story" | "territory" | "part") => void;
+  view: AtlasView;
+  onNavigate: (view: AtlasView) => void;
   graph: RepositoryGraph;
   theme: Theme;
   searchQuery: string;
@@ -86,6 +90,7 @@ export default function AtlasWorkspace(props: AtlasWorkspaceProps) {
     <div className="atlas-heading">
       {props.view === "part" && actor ? <PartHeading graph={props.graph} actor={actor} />
         : props.view === "territory" ? <TerritoryHeading graph={props.graph} />
+        : props.view === "overview" ? <OverviewHeading graph={props.graph} />
         : story ? <JourneyHeading graph={props.graph} /> : null}
     </div>
     <aside className="atlas-sidebar">
@@ -110,13 +115,14 @@ export default function AtlasWorkspace(props: AtlasWorkspaceProps) {
           <summary><span>Parts</span><span className="atlas-mono atlas-muted">{legendSummary}</span></summary>{legendRows}
         </details>
         : <div className="atlas-legend"><p className="atlas-kicker">Product source · Scanned</p>{legendRows}</div>)}
-      {props.view !== "part" && story && <div className="atlas-journeys"><p className="atlas-kicker">Journeys · Written</p>{story.journeys.map((each, index) => <button key={index} aria-pressed={journeyIndex === index} onClick={() => chooseJourney(index)}><span>{each.name}</span><span className="atlas-mono atlas-muted">{journeyHops(each, story.flows).length}</span></button>)}</div>}
+      {(props.view === "story" || props.view === "territory") && story && <div className="atlas-journeys"><p className="atlas-kicker">Journeys · Written</p>{story.journeys.map((each, index) => <button key={index} aria-pressed={journeyIndex === index} onClick={() => chooseJourney(index)}><span>{each.name}</span><span className="atlas-mono atlas-muted">{journeyHops(each, story.flows).length}</span></button>)}</div>}
       <p className="atlas-kicker">The story</p>
       <p>Parts and journeys are written by hand. Files, imports, and names are read from the code.</p>
     </aside>
     <div className="atlas-content">
       {props.graph.warnings?.length > 0 && <details className="atlas-warnings"><summary>{props.graph.warnings.length} scan warning{props.graph.warnings.length === 1 ? "" : "s"}</summary><ul>{props.graph.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></details>}
       {props.view === "part" && actor ? <PartView graph={props.graph} actor={actor} theme={props.theme} onSelectActor={selectActor} onOpenFile={props.onOpenFile} />
+        : props.view === "overview" ? <OverviewView graph={props.graph} theme={props.theme} pickedId={selection} onSelectActor={id => { if (id === GAP_ID) { setGapSelected(true); props.onNavigate("territory"); } else selectActor(id); }} onNavigate={props.onNavigate} onFollowJourney={index => { chooseJourney(index); props.onNavigate("story"); }} />
         : props.view === "territory" ? <TerritoryView graph={props.graph} actor={actor} gap={gapSelected} journeyIndex={journeyIndex} onSelectActor={selectActor} onOpenFile={props.onOpenFile} selectedId={props.selectedId} onInside={() => props.onNavigate("part")} />
         : story && actor ? <JourneyView key={journeyIndex} graph={props.graph} theme={props.theme} journeyIndex={journeyIndex} hops={hops} step={current} playing={playing} onStep={stepTo} onPlaying={setPlaying} actor={actor} onSelectActor={selectActor} onOpenFile={props.onOpenFile} onInside={() => props.onNavigate("part")} />
         : <section className="atlas-empty">

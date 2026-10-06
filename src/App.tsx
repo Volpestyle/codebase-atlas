@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import AtlasWorkspace from "./AtlasWorkspace";
+import AtlasWorkspace, { type AtlasView } from "./AtlasWorkspace";
 import { useTheme } from "./ui/useTheme";
 import "./Atlas.css";
 import { scanGitHubRepository } from "./github";
@@ -29,7 +29,7 @@ const isTauriRuntime = "__TAURI_INTERNALS__" in window;
 // LAN / Tailscale.
 const isDesktopRuntime = isTauriRuntime && navigator.maxTouchPoints < 2;
 
-type ViewMode = "story" | "territory" | "part";
+type ViewMode = AtlasView;
 
 type SavedSource =
   | { kind: "local"; value: string }
@@ -113,7 +113,7 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [view, setView] = useState<ViewMode>("story");
+  const [view, setView] = useState<ViewMode>("overview");
   const [githubDialogOpen, setGitHubDialogOpen] = useState(false);
   const [githubUrl, setGitHubUrl] = useState("");
   const [computerDialogOpen, setComputerDialogOpen] = useState(false);
@@ -861,6 +861,7 @@ function App() {
       <header className="atlas-header">
         <div className="atlas-brand"><strong>atlas</strong><span>{graph?.name ?? "No source"} · {graph?.branch ?? "—"}</span></div>
         <nav className="atlas-nav" aria-label="Lens">
+          <button aria-current={view === "overview" ? "page" : undefined} onClick={() => setView("overview")}>Overview</button>
           <button aria-current={view === "story" ? "page" : undefined} onClick={() => setView("story")}>How it works</button>
           <button aria-current={view === "territory" ? "page" : undefined} onClick={() => setView("territory")}>Where it lives</button>
           <button aria-current={view === "part" ? "page" : undefined} onClick={() => setView("part")}>Inside a part</button>
