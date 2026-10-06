@@ -257,22 +257,35 @@ html:has(.atlas-shell), html:has(.atlas-shell) body, html:has(.atlas-shell) #roo
 .atlas-content .overview-camera button:last-child { font-size:13px; }
 .atlas-content .overview-camera button:hover:not(:disabled) { color:var(--ink); background:var(--pill); }
 .atlas-content .overview-camera button:disabled { opacity:.4; cursor:default; }
-.overview-measure { width:100%; }
+.overview-card { --ov-faded:.13; --ov-focus-fill:color-mix(in srgb, var(--ink) 7%, var(--card)); }
+:root[data-theme="dark"] .overview-card { --ov-focus-fill:color-mix(in srgb, var(--ink) 11%, var(--card)); --ov-faded:.16; }
+.overview-body { display:grid; grid-template-columns:minmax(0,1fr); }
+.overview-measure { width:100%; min-width:0; }
 .overview-viewport { position:relative; overflow:hidden; touch-action:none; cursor:grab; user-select:none; -webkit-user-select:none; }
 .overview-viewport:active { cursor:grabbing; }
 .ov-stage { position:absolute; left:0; top:0; transform-origin:0 0; }
 .ov-board, .ov-overlay { position:absolute; inset:0; display:block; overflow:visible; }
 .ov-overlay { pointer-events:none; }
-.ov-board path, .ov-board ellipse, .ov-board circle { vector-effect:non-scaling-stroke; stroke-linejoin:round; stroke-linecap:round; transition:stroke 220ms cubic-bezier(.5,0,.1,1); }
-.ov-board [data-part], .ov-board .ov-rail, .ov-figure { transition:opacity 220ms cubic-bezier(.5,0,.1,1), stroke 220ms cubic-bezier(.5,0,.1,1); }
+.ov-board path, .ov-board ellipse, .ov-board circle { vector-effect:non-scaling-stroke; stroke-linejoin:round; stroke-linecap:round; transition:stroke 200ms cubic-bezier(.5,0,.1,1), stroke-width 200ms cubic-bezier(.5,0,.1,1), fill 200ms cubic-bezier(.5,0,.1,1); }
+.ov-board [data-part], .ov-board .ov-rail, .ov-board .ov-track, .ov-figure { transition:opacity 200ms cubic-bezier(.5,0,.1,1); }
 .ov-ground { fill:var(--card); stroke:var(--hairline-edge); stroke-width:var(--hairline-stroke); }
 .ov-ground-top { fill:var(--pill); stroke:none; }
 .ov-crease { fill:none; stroke:var(--hairline-lo); stroke-width:var(--hairline-stroke); }
 .ov-plate { fill:var(--card); stroke:var(--hairline-edge); stroke-width:var(--hairline-stroke); }
 .ov-plate-top { fill:var(--card); stroke:none; }
 .ov-district { cursor:pointer; }
-.ov-plate-label { fill:var(--body); font-family:var(--font-sans); font-weight:500; pointer-events:none; paint-order:stroke; stroke:var(--card); stroke-width:4px; stroke-linejoin:round; }
-.ov-rail { fill:none; stroke:var(--graphic); stroke-width:1; opacity:.55; }
+.ov-plate-label { fill:var(--body); font-family:var(--font-sans); font-weight:500; pointer-events:none; paint-order:stroke; stroke:var(--card); stroke-width:4px; stroke-linejoin:round; transition:opacity 200ms cubic-bezier(.5,0,.1,1), fill 200ms cubic-bezier(.5,0,.1,1); }
+/* Rails never read as plate borders: borders are solid hairlines, rails dotted.
+   At rest they are a faint dotted line; a part in focus swaps them for its tracks. */
+.ov-rail { fill:none; stroke:var(--graphic); stroke-width:1.2; stroke-dasharray:0 4; opacity:.5; }
+.ov-track { pointer-events:none; animation:ov-in 200ms cubic-bezier(.5,0,.1,1); }
+.ov-track-halo { fill:none; stroke:var(--card); stroke-width:6; }
+.ov-track-line { fill:none; stroke:var(--ink); stroke-width:1.8; stroke-dasharray:0 4.5; }
+.ov-arrow { fill:none; stroke:var(--ink); stroke-width:1.5; paint-order:stroke; }
+@keyframes ov-in { from { opacity:0; } }
+.ov-focus-label { fill:var(--ink); font-family:var(--font-sans); font-weight:600; text-anchor:middle; paint-order:stroke; stroke:var(--ov-focus-fill); stroke-width:5px; stroke-linejoin:round; animation:ov-in 200ms cubic-bezier(.5,0,.1,1); }
+.ov-focus-label.is-above { stroke:var(--card); }
+.ov-focus-ring { fill:none; stroke:var(--ink); stroke-width:2; vector-effect:non-scaling-stroke; stroke-linejoin:round; }
 .ov-pillar, .ov-marker { cursor:pointer; }
 .ov-sil { fill:var(--card); stroke:var(--hairline-edge); stroke-width:var(--hairline-stroke); }
 .ov-pillar .ov-crease { stroke:var(--hairline-mid); }
@@ -281,13 +294,28 @@ html:has(.atlas-shell), html:has(.atlas-shell) body, html:has(.atlas-shell) #roo
 .ov-figures { position:absolute; inset:0; pointer-events:none; }
 .ov-figure { position:absolute; pointer-events:auto; cursor:pointer; }
 .ov-figure .part-figure-box { padding:0; }
-.ov-figure .part-figure { max-width:none; }
+.ov-figure .part-figure { max-width:none; outline:none; }
 .ov-import { fill:none; stroke:var(--ink); stroke-width:1.2; stroke-dasharray:2 3; vector-effect:non-scaling-stroke; }
-.ov-packet { fill:var(--ink); }
 .ov-source { fill:none; stroke:var(--ink); stroke-width:1.5; vector-effect:non-scaling-stroke; }
-.ov-rail-label rect { fill:var(--card); stroke:var(--line); stroke-width:1; vector-effect:non-scaling-stroke; }
-.ov-rail-label text { fill:var(--ink); font:11px var(--font-mono); text-anchor:middle; }
-.ov-rail-label.is-written text { fill:var(--body); font-family:var(--font-sans); font-style:italic; }
+/* The connection card: beside the board when there is room, below it when not. */
+.overview-panel { border-top:1px solid var(--line); min-width:0; }
+.overview-panel-inner { padding:12px 16px 16px; }
+.overview-panel h2 { margin:2px 0 4px; font-size:15px; font-weight:500; color:var(--ink); }
+.overview-panel p { margin:6px 0; font-size:13px; }
+.ov-card-group { margin-top:10px; }
+.ov-card-group h3 { margin:0 0 2px; font-weight:400; }
+.ov-card-group ul { list-style:none; margin:0; padding:0; }
+.atlas-content .ov-card-group .ov-card-more { display:block; min-height:32px; font-size:12.5px; color:var(--muted); }
+.atlas-content .ov-card-group li button { display:flex; flex-direction:column; align-items:flex-start; gap:0; min-height:44px; padding:4px 8px; line-height:1.45; margin:0 -8px; width:calc(100% + 16px); border-radius:8px; text-align:left; background:transparent; cursor:pointer; }
+.atlas-content .ov-card-group li button:hover, .atlas-content .ov-card-group li button:focus-visible, .atlas-content .ov-card-group li button.is-active { background:var(--pill); }
+.ov-card-name { color:var(--ink); font-size:13px; }
+.ov-card-names { color:var(--muted); font-size:11.5px; max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ov-card-flow { color:var(--muted); font-size:12.5px; font-style:italic; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+@media(min-width:1100px) {
+  .overview-body { grid-template-columns:minmax(0,1fr) 272px; }
+  .overview-panel { border-top:0; border-left:1px solid var(--line); position:relative; }
+  .overview-panel-inner { position:absolute; inset:0; overflow:auto; }
+}
 .overview-foot { padding:8px 16px 16px; border-top:1px solid var(--line); }
 .overview-parts { display:flex; flex-wrap:wrap; gap:4px; }
 .atlas-content .overview-parts button { min-height:36px; padding:0 10px; border-radius:8px; font-size:13px; color:var(--body); }
@@ -298,14 +326,9 @@ html:has(.atlas-shell), html:has(.atlas-shell) body, html:has(.atlas-shell) #roo
 .atlas-content .overview-parts button.is-gap { background-image:repeating-linear-gradient(135deg, transparent 0 4px, var(--line) 4px 5px); }
 .overview-key { margin:8px 0 0; font-size:12px; }
 .overview-parts-fold > summary { min-height:44px; display:flex; align-items:center; gap:8px; cursor:pointer; color:var(--body); }
-.overview-pick { margin-top:24px; display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.2fr); gap:32px; }
+.overview-pick { margin-top:24px; max-width:640px; }
 .overview-pick h2 { margin:4px 0; }
 .overview-pick p { margin:6px 0; }
 .overview-actions { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; margin-top:12px; }
-.overview-links { list-style:none; margin:8px 0 0; padding:0; }
-.overview-links li { display:flex; flex-wrap:wrap; gap:2px 12px; align-items:baseline; padding:6px 0; border-bottom:1px solid var(--line); }
-.overview-links .atlas-text-link { min-height:32px; }
-.overview-names { width:100%; color:var(--body); }
-.overview-flow { width:100%; color:var(--muted); font-style:italic; }
-@media(max-width:800px) { .overview-pick { grid-template-columns:minmax(0,1fr); gap:16px; } .overview-readout { flex-basis:100%; order:2; white-space:normal; } .overview-camera { margin-left:0; } }
-@media(prefers-reduced-motion:reduce) { .ov-board path, .ov-board [data-part], .ov-board .ov-rail, .ov-figure { transition:none; } }
+@media(max-width:800px) { .overview-readout { flex-basis:100%; order:2; white-space:normal; } .overview-camera { margin-left:0; } }
+@media(prefers-reduced-motion:reduce) { .ov-board path, .ov-board [data-part], .ov-board .ov-rail, .ov-board .ov-track, .ov-plate-label, .ov-focus-label, .ov-figure { transition:none; animation:none; } }

@@ -1,9 +1,9 @@
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import type { RepositoryGraph, StoryActor } from "./model";
 import {
-  BOARD, GAP_ID, buildOverviewLayout, crossingLabel, elbow, fitCamera, layoutBounds, groundTextMatrix, isoBlock, isoBox, isoDepth, isoProject,
-  openPath, pointAlong, placeLabels, plateLabel, quarterAzimuth, rectCenter,
-  type IsoCamera, type OverviewLayout, type Point,
+  BOARD, GAP_ID, buildOverviewLayout, closedPath, connectionGroups, elbow, fitCamera, layoutBounds, groundTextMatrix, isoBlock, isoBox, isoDepth, isoProject,
+  openPath, plateLabel, quarterAzimuth, railArrows, rectCenter, spanAt, wrapName,
+  type ConnectionRow, type IsoCamera, type OverviewLayout, type Point,
 } from "./overview";
 import { actorFigure } from "./storyFigures";
 import PartFigure from "./ui/PartFigure";
@@ -13,7 +13,7 @@ import { useReducedMotion } from "./ui/useReducedMotion";
 export function OverviewHeading({ graph }: { graph: RepositoryGraph }) {
   return <>
     <h1>The whole codebase, <em>from above</em>.</h1>
-    <p className="atlas-intro">Each part of the story is a district; each block a file, taller for more lines. Rails join parts that import each other or exchange data in the story. Point at a part to see its connections.{graph.story ? "" : " This repository has no story yet, so every file sits in the hatched lot."}</p>
+    <p className="atlas-intro">Each part of the story is a district; each block a file, taller for more lines. Point at a part to see what it takes from and what uses it; click to pin it.{graph.story ? "" : " This repository has no story yet, so every file sits in the hatched lot."}</p>
   </>;
 }
 
@@ -35,7 +35,10 @@ const FIGURE = 1.45;
 /** How far above its pad centre a figure's box starts, as a share of its width:
  *  Hairline draws a figure's foot at about two thirds of its 5:4 box. */
 const FIGURE_LIFT = .8 * .66;
-const MONO_CHAR = 6.6;
+/** Blocks rise and settle over this long when the part in focus changes. */
+const RISE_MS = 200;
+/** Screen units between direction chevrons on a focused rail. */
+const ARROW_SPACING = 46;
 const fmt = (n: number) => n.toLocaleString();
 const cssValue = (value: string) => typeof CSS !== "undefined" && CSS.escape ? CSS.escape(value) : value.replace(/["\\]/g, "\\$&");
 
@@ -50,18 +53,20 @@ function cachedLayout(graph: RepositoryGraph): OverviewLayout {
 
 type Hover = { kind: "part"; id: string } | { kind: "file"; id: string } | null;
 
+interface Track { key: string; direction: ConnectionRow["direction"]; d: string; arrows: { x: number; y: number; angle: number }[] }
+
 /** The static board: ground, plates, rails, blocks and markers, painted back
  *  to front for one azimuth. Highlight is a stylesheet over its data
- *  attributes; the board repaints only when the raised part changes (blocks
- *  rest pressed down and rise to full height for the part in focus, or for
- *  every part once zoomed in). */
-const Board = memo(function Board({ layout, cam, hatch, names, raised, detail }: { layout: OverviewLayout; cam: IsoCamera; hatch: string; names: Map<string, string>; raised: string | null; detail: boolean }) {
+ *  attributes; the board repaints only while blocks rise or settle (they rest
+ *  pressed down and rise to full height for the part in focus, or for every
+ *  part once zoomed in) and when the focused part's tracks change. */
+const Board = memo(function Board({ layout, cam, hatch, names, rise, detail, tracks }: { layout: OverviewLayout; cam: IsoCamera; hatch: string; names: Map<string, string>; rise: Record<string, number>; detail: boolean; tracks: Track[] }) {
   const ground = isoBox(cam, { x: 0, y: 0, width: BOARD, height: BOARD }, -14, 0);
   const showLabels = cam.scale * LABEL_FONT >= 7;
   const items: { depth: number; node: ReactNode }[] = [];
   for (const district of layout.districts) for (const pillar of district.pillars) {
     const half = pillar.size / 2;
-    const height = detail || district.id === raised ? pillar.height : pillar.rest;
+    const height = detail ? pillar.height : pillar.rest + (pillar.height - pillar.rest) * (rise[district.id] ?? 0);
     const box = isoBlock(cam, { x: pillar.x - half, y: pillar.y - half, width: pillar.size, height: pillar.size }, 3, 3 + height);
     const top = isoProject(cam, pillar.x, pillar.y, 3 + height);
     items.push({ depth: isoDepth(cam.az, pillar.x + half, pillar.y + half), node: <g key={pillar.id} className={`ov-pillar${pillar.aggregate ? " is-crate" : ""}`} data-part={district.id} data-pillar={pillar.id}>
@@ -89,7 +94,13 @@ const Board = memo(function Board({ layout, cam, hatch, names, raised, detail }:
         <path className="ov-plate" d={plate.silhouette} /><path className="ov-plate-top" d={plate.top} style={district.id === GAP_ID ? { fill: `url(#${hatch})` } : undefined} /><path className="ov-crease" d={plate.crease} />
       </g>;
     })}
-    {layout.connections.map(connection => <path key={connection.key} className="ov-rail" data-a={connection.a} data-b={connection.b} d={openPath(connection.rail.map(([x, y]) => isoProject(cam, x, y, 0)))} />)}
+    {/* At rest every rail is a faint dotted line; with a part in focus they
+        give way to its tracks: dotted ink with chevrons the way things travel. */}
+    {layout.connections.map(connection => <path key={connection.key} className="ov-rail" d={openPath(connection.rail.map(([x, y]) => isoProject(cam, x, y, 0)))} />)}
+    {tracks.map(track => <g key={track.key} className="ov-track" data-row={track.key}>
+      <path className="ov-track-halo" d={track.d} /><path className="ov-track-line" d={track.d} />
+      {track.arrows.map((arrow, i) => <path key={i} className="ov-arrow" d="M-3 -3.6L1.6 0L-3 3.6" transform={`translate(${Math.round(arrow.x * 10) / 10} ${Math.round(arrow.y * 10) / 10}) rotate(${Math.round(arrow.angle)})`} />)}
+    </g>)}
     {items.map(item => item.node)}
     {/* Names lie flat on each plate's near edge, painted last with a halo so a
         block in front never cuts through them: an annotation, not a solid. */}
@@ -118,6 +129,8 @@ export default function OverviewView({ graph, theme, pickedId, onSelectActor, on
   const [view, setView] = useState({ x: 0, y: 0, zoom: 1 });
   const [hover, setHover] = useState<Hover>(null);
   const [keyFocus, setKeyFocus] = useState<string | null>(null);
+  /** The connection-card row pointed at or focused: its rail alone stays inked. */
+  const [rowKey, setRowKey] = useState<string | null>(null);
   const reduced = useReducedMotion();
   const hatch = useId().replace(/:/g, "");
   const layout = useMemo(() => cachedLayout(graph), [graph]);
@@ -164,8 +177,39 @@ export default function OverviewView({ graph, theme, pickedId, onSelectActor, on
   // The part whose blocks rise: the one in focus, or the one whose block is pointed at.
   const raisedPart = focusPart ?? (focusFile ? layout.pillars.get(focusFile)?.district ?? null : null);
   const detail = view.zoom >= DETAIL_ZOOM;
-  const links = useMemo(() => focusPart ? layout.connections.filter(each => each.a === focusPart || each.b === focusPart) : [], [layout, focusPart]);
-  const related = useMemo(() => new Set(focusPart ? [focusPart, ...links.map(each => each.a === focusPart ? each.b : each.a)] : []), [focusPart, links]);
+  const groups = useMemo(() => focusPart ? connectionGroups(layout.connections, focusPart, 3, narrow ? 40 : 32) : null, [layout, focusPart, narrow]);
+  const rows = useMemo(() => groups ? [...groups.takes, ...groups.uses] : [], [groups]);
+  const related = useMemo(() => new Set(focusPart ? [focusPart, ...rows.map(row => row.other)] : []), [focusPart, rows]);
+  const tracks = useMemo<Track[]>(() => rows.map(row => {
+    const points = row.rail.map(([x, y]) => isoProject(cam, x, y, 0));
+    // Two rows on one rail (traffic both ways) stagger their chevrons.
+    return { key: row.key, direction: row.direction, d: openPath(points), arrows: railArrows(points, ARROW_SPACING, row.direction === "in" ? ARROW_SPACING * .3 : ARROW_SPACING * .8) };
+  }).filter(track => track.d), [rows, cam]);
+
+  // Blocks ease up for the part in focus and back down as it leaves.
+  const [rise, setRise] = useState<Record<string, number>>({});
+  const riseRef = useRef(rise);
+  useEffect(() => {
+    const from = riseRef.current;
+    const goal = (id: string) => id === raisedPart ? 1 : 0;
+    const ids = [...new Set([...Object.keys(from), ...(raisedPart ? [raisedPart] : [])])];
+    const at = (t: number) => {
+      const next: Record<string, number> = {};
+      for (const id of ids) { const value = (from[id] ?? 0) + (goal(id) - (from[id] ?? 0)) * t; if (value > .001) next[id] = value; }
+      riseRef.current = next;
+      setRise(next);
+    };
+    if (reduced) { at(1); return; }
+    let frame = 0;
+    const start = performance.now();
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / RISE_MS);
+      at(1 - (1 - t) ** 3);
+      if (t < 1) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [raisedPart, reduced]);
 
   // Hovering a file: its imports, as elbows along the same axes as the rails.
   const filePillar = focusFile ? layout.pillars.get(focusFile) : undefined;
@@ -179,36 +223,85 @@ export default function OverviewView({ graph, theme, pickedId, onSelectActor, on
     return [...targets].slice(0, 32).map(id => layout.pillars.get(id)!);
   }, [filePillar, layout]);
 
+  // Three levels, monochrome: the part in focus (filled plate, ink outline,
+  // inked name and blocks), its connections (as at rest), and everything
+  // else faded well back. Plate borders stay solid; rails are dotted tracks.
   const focusStyle = useMemo(() => {
     if (focusPart) {
+      const part = `[data-part="${cssValue(focusPart)}"]`;
       const keep = [...related].map(id => `[data-part="${cssValue(id)}"]`).join(",");
-      const own = `[data-a="${cssValue(focusPart)}"],[data-b="${cssValue(focusPart)}"]`;
-      return `.ov-stage [data-part]:not(${keep}){opacity:.2}.ov-stage .ov-rail:not(${own}){opacity:.15}.ov-stage .ov-rail:is(${own}){stroke:var(--ink);stroke-width:2;opacity:1}.ov-stage [data-part="${cssValue(focusPart)}"] .ov-plate,.ov-stage [data-part="${cssValue(focusPart)}"] .ov-plate-top{stroke:var(--ink)}.ov-stage .ov-pillar[data-part="${cssValue(focusPart)}"] .ov-sil{stroke:var(--ink)}`;
+      // A card row in focus: its rail alone stays inked and its other end
+      // alone stays at full strength among the connections.
+      const active = rowKey ? rows.find(each => each.key === rowKey) : undefined;
+      const row = active ? `.ov-stage .ov-track:not([data-row="${cssValue(active.key)}"]){opacity:.18}.ov-stage .ov-track[data-row="${cssValue(active.key)}"] :is(.ov-track-line,.ov-arrow){stroke-width:2.4}`
+        + `.ov-stage :is(${keep}):not(${part},[data-part="${cssValue(active.other)}"]){opacity:.45}.ov-stage .ov-district[data-part="${cssValue(active.other)}"] .ov-plate{stroke:var(--ink)}` : "";
+      return `.ov-stage [data-part]:not(${keep}){opacity:var(--ov-faded)}.ov-stage .ov-rail{opacity:0}`
+        + `.ov-stage .ov-district${part} .ov-plate{stroke:var(--ink);stroke-width:1.75}.ov-stage .ov-district${part}:not(.is-gap) .ov-plate-top{fill:var(--ov-focus-fill)}`
+        + `.ov-stage .ov-district${part} .ov-crease{stroke:var(--hairline-mid)}.ov-stage .ov-pillar${part} .ov-sil,.ov-stage .ov-marker${part} .ov-sil{stroke:var(--ink)}`
+        + `.ov-stage .ov-plate-label${part}{opacity:0}${row}`;
     }
     if (filePillar) {
       const keep = [filePillar, ...fileTargets].map(pillar => `[data-pillar="${cssValue(pillar.id)}"]`).join(",");
       return `.ov-stage .ov-pillar:not(${keep}),.ov-stage .ov-marker,.ov-stage .ov-figure{opacity:.25}.ov-stage .ov-rail{opacity:.15}.ov-stage :is(${keep}) .ov-sil{stroke:var(--ink)}`;
     }
     return "";
-  }, [focusPart, related, filePillar, fileTargets]);
+  }, [focusPart, related, rows, rowKey, filePillar, fileTargets]);
 
-  // Rail labels and packets for the focused part, bounded and de-overlapped.
-  const railMarks = useMemo(() => {
-    if (!focusPart) return { labels: [], packets: [] };
-    const ordered = [...links].sort((p, q) => (q.imports + q.flows.length * 4) - (p.imports + p.flows.length * 4));
-    const packets = ordered.slice(0, 14).map(link => {
-      const points = (link.forward ? link.rail : [...link.rail].reverse()).map(([x, y]) => isoProject(cam, x, y, 0));
-      return { key: link.key, d: openPath(points), at: points[Math.floor(points.length / 2)] ?? points[0] };
-    }).filter(each => each.d);
-    const candidates = ordered.map(link => {
-      const text = link.names.length ? crossingLabel(link.names, narrow ? 2 : 3, narrow ? 22 : 34)
-        : link.flows[0] ? `“${link.flows[0].carries.length > (narrow ? 22 : 34) ? `${link.flows[0].carries.slice(0, narrow ? 21 : 33)}…` : link.flows[0].carries}”` : "";
-      const anchor = pointAlong(link.a === focusPart ? link.rail : [...link.rail].reverse(), .62);
-      const [x, y] = isoProject(cam, anchor[0], anchor[1], 0);
-      return { key: link.key, text, written: !link.names.length, x, y, width: text.length * MONO_CHAR + 12, height: 20 };
-    }).filter(each => each.text);
-    return { labels: placeLabels(candidates, narrow ? 4 : 9), packets };
-  }, [focusPart, links, cam, narrow]);
+  // The focused part's name stands upright under its figure, larger than
+  // the names lying on the ground: the one label that must read at a glance.
+  const focusLabel = useMemo(() => {
+    if (!focusPart) return null;
+    const name = nameOf(focusPart);
+    const district = layout.districts.find(each => each.id === focusPart);
+    const marker = layout.markers.find(each => each.actorId === focusPart);
+    if (marker) {
+      const [x, y] = isoProject(cam, marker.x, marker.y, 0);
+      return { x, y: y + 18, size: 13, lines: [name], above: true };
+    }
+    if (!district) return null;
+    const { pad, plate } = district;
+    const corners = (r: typeof pad): Point[] => [[r.x, r.y], [r.x + r.width, r.y], [r.x + r.width, r.y + r.height], [r.x, r.y + r.height]];
+    const near = corners(pad).reduce((best, corner) => isoDepth(cam.az, corner[0], corner[1]) > isoDepth(cam.az, best[0], best[1]) ? corner : best);
+    const [px, py] = isoProject(cam, near[0], near[1], 3);
+    const top = corners(plate).map(([x, y]) => isoProject(cam, x, y, 3));
+    // Largest size whose one, then two, lines fit across the plate where they
+    // stand. A name is never cut: if nothing fits it takes two lines at the
+    // smallest size and its halo carries it over the plate's edge.
+    const place = (size: number, lines: string[], span: [number, number] | null) => {
+      const half = Math.max(...lines.map(line => line.length)) * size * .58 / 2;
+      const [lo, hi] = span ?? [px, px];
+      const x = hi - lo > half * 2 + 16 ? Math.max(lo + 8 + half, Math.min(hi - 8 - half, px)) : (lo + hi) / 2;
+      return { x, y: py + size + 2, size, lines, above: false };
+    };
+    for (const count of [1, 2]) for (const size of [14, 13, 12]) {
+      const y = py + size + 2, lead = size * 1.2;
+      const spans = Array.from({ length: count }, (_, i) => spanAt(top, y + lead * i - size * .4));
+      const room = Math.min(...spans.map(span => span ? span[1] - span[0] - 16 : 0));
+      const lines = wrapName(name, room / (size * .58), count);
+      if (lines.every(line => !line.endsWith("…")) && lines.join(" ") === name) return place(size, lines, spans[0]);
+    }
+    // A plate too small for its name: the name stands over the figure's
+    // head instead, haloed against the faded board behind it.
+    const [cx, cy] = isoProject(cam, pad.x + pad.width / 2, pad.y + pad.height / 2, 3);
+    const actor = actors.find(each => each.id === district.actorId);
+    const hasFigure = Boolean(actor && actorFigure(actor));
+    return { x: cx, y: hasFigure ? cy - figureSpan * cam.scale * FIGURE_LIFT + figureSpan * cam.scale * .14 : cy, size: 13, lines: [name], above: true };
+    return null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusPart, layout, cam, names, actors, figureSpan]);
+
+  // A keyboard-focused part gets a ring on the board itself, around its plate
+  // (or its marker), drawn on the ground.
+  const ring = useMemo(() => {
+    if (!keyFocus || hover) return null;
+    const district = layout.districts.find(each => each.id === keyFocus);
+    const marker = layout.markers.find(each => each.actorId === keyFocus);
+    const rect = district ? district.plate : marker ? { x: marker.x - 14, y: marker.y - 14, width: 28, height: 28 } : null;
+    if (!rect) return null;
+    const out = 13;
+    const corners: Point[] = [[rect.x - out, rect.y - out], [rect.x + rect.width + out, rect.y - out], [rect.x + rect.width + out, rect.y + rect.height + out], [rect.x - out, rect.y + rect.height + out]];
+    return closedPath(corners.map(([x, y]) => isoProject(cam, x, y, 0)));
+  }, [keyFocus, hover, layout, cam]);
 
   // Figures stand on their pads at one scale everywhere.
   const figureWidth = figureSpan * cam.scale;
@@ -251,6 +344,10 @@ export default function OverviewView({ graph, theme, pickedId, onSelectActor, on
   }
   function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (event.pointerType === "mouse" && event.button !== 0) return;
+    // Pressing the board ends keyboard focus on a part chip, so the board
+    // shows what was pointed at rather than the chip.
+    if (document.activeElement instanceof HTMLElement && document.activeElement.closest(".overview-card")) document.activeElement.blur();
+    setKeyFocus(null);
     pointers.current.set(event.pointerId, local(event));
     const points = [...pointers.current.values()];
     if (points.length === 2) {
@@ -310,7 +407,7 @@ export default function OverviewView({ graph, theme, pickedId, onSelectActor, on
     }
     if (focusPart) {
       const district = layout.districts.find(each => each.id === focusPart);
-      const parts = links.length;
+      const parts = new Set(rows.map(row => row.other)).size;
       const facts = district ? `${fmt(district.files)} files${graph.stats.lineCountAvailable ? ` · ${fmt(district.lines)} lines` : ""}` : (actors.find(each => each.id === focusPart)?.role === "person" ? "a person" : "outside the code");
       return `${nameOf(focusPart)} · ${facts} · ${parts} connection${parts === 1 ? "" : "s"}`;
     }
@@ -318,8 +415,6 @@ export default function OverviewView({ graph, theme, pickedId, onSelectActor, on
   })();
 
   const picked = actors.find(each => each.id === pickedId);
-  const pickedLinks = picked ? layout.connections.filter(each => each.a === picked.id || each.b === picked.id)
-    .sort((p, q) => (q.imports + q.flows.length * 4) - (p.imports + p.flows.length * 4)) : [];
   const pickedDistrict = picked && layout.districts.find(each => each.id === picked.id);
   const journeys = picked ? (story?.journeys ?? []).flatMap((journey, index) => journey.steps.includes(picked.id) ? [{ journey, index }] : []) : [];
   const stageStyle: CSSProperties = { transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})`, width, height: camera.height };
@@ -337,40 +432,42 @@ export default function OverviewView({ graph, theme, pickedId, onSelectActor, on
           <button onClick={() => { setView({ x: 0, y: 0, zoom: 1 }); setTurns(Math.round(turns / 4) * 4); }} disabled={view.zoom === 1 && view.x === 0 && view.y === 0 && turns % 4 === 0}>Reset</button>
         </div>
       </div>
-      <div ref={container} className="overview-measure">
-        <div ref={viewport} className="overview-viewport" style={{ height: camera.height }}
-          onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
-          onPointerOver={event => setHover(hoverFrom(event.target))} onPointerLeave={() => setHover(null)} onClick={onClick}>
-          <style>{focusStyle}</style>
-          <div className={`ov-stage${focusPart || filePillar ? " is-focus" : ""}`} style={stageStyle}>
-            <svg className="ov-board" width={width} height={camera.height} viewBox={`0 0 ${width} ${camera.height}`} aria-hidden="true">
-              <defs><pattern id={hatch} width="6" height="6" patternUnits="userSpaceOnUse"><path d="M-1 1 L1 -1 M0 6 L6 0 M5 7 L7 5" stroke="var(--graphic)" strokeWidth=".6" /></pattern></defs>
-              <Board layout={layout} cam={cam} hatch={hatch} names={names} raised={raisedPart} detail={detail} />
-            </svg>
-            <div className="ov-figures" aria-hidden="true">
-              {figures.map(({ actor, district, sx, sy }) => <div key={district.id} className="ov-figure" data-part={district.id} style={{ left: sx - figureWidth / 2, top: sy - figureWidth * FIGURE_LIFT, width: figureWidth }}>
-                <PartFigure actor={actor} theme={theme} />
-              </div>)}
+      <div className="overview-body">
+        <div ref={container} className="overview-measure">
+          <div ref={viewport} className="overview-viewport" style={{ height: camera.height }}
+            onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
+            onPointerOver={event => setHover(hoverFrom(event.target))} onPointerLeave={() => setHover(null)} onClick={onClick}>
+            <style>{focusStyle}</style>
+            <div className={`ov-stage${focusPart || filePillar ? " is-focus" : ""}`} style={stageStyle}>
+              <svg className="ov-board" width={width} height={camera.height} viewBox={`0 0 ${width} ${camera.height}`} aria-hidden="true">
+                <defs><pattern id={hatch} width="6" height="6" patternUnits="userSpaceOnUse"><path d="M-1 1 L1 -1 M0 6 L6 0 M5 7 L7 5" stroke="var(--graphic)" strokeWidth=".6" /></pattern></defs>
+                <Board layout={layout} cam={cam} hatch={hatch} names={names} rise={rise} detail={detail} tracks={tracks} />
+              </svg>
+              {/* Figures are pictures, not controls: pressing one must not focus it
+                  (Hairline's own focus outline would draw a box round it). */}
+              <div className="ov-figures" aria-hidden="true" onMouseDown={event => event.preventDefault()}>
+                {figures.map(({ actor, district, sx, sy }) => <div key={district.id} className="ov-figure" data-part={district.id} style={{ left: sx - figureWidth / 2, top: sy - figureWidth * FIGURE_LIFT, width: figureWidth }}>
+                  <PartFigure actor={actor} theme={theme} />
+                </div>)}
+              </div>
+              <svg className="ov-overlay" width={width} height={camera.height} viewBox={`0 0 ${width} ${camera.height}`} aria-hidden="true">
+                {ring && <path className="ov-focus-ring" d={ring} />}
+                {focusLabel && <text key={focusPart} className={`ov-focus-label${focusLabel.above ? " is-above" : ""}`} x={focusLabel.x} y={focusLabel.y} fontSize={focusLabel.size}>
+                  {focusLabel.lines.map((line, i) => <tspan key={i} x={focusLabel.x} dy={i ? focusLabel.size * 1.2 : 0}>{line}</tspan>)}
+                </text>}
+                {filePillar && fileTargets.map(target => {
+                  const points = elbow([filePillar.x, filePillar.y], [target.x, target.y]).map(([x, y]) => isoProject(cam, x, y, 3));
+                  return <path key={target.id} className="ov-import" d={openPath(points)} />;
+                })}
+                {filePillar && (() => {
+                  const [x, y] = isoProject(cam, filePillar.x, filePillar.y, 3);
+                  return <ellipse className="ov-source" cx={x} cy={y} rx={Math.max(5, cam.scale * 14)} ry={Math.max(2.5, cam.scale * 7)} />;
+                })()}
+              </svg>
             </div>
-            <svg className="ov-overlay" width={width} height={camera.height} viewBox={`0 0 ${width} ${camera.height}`} aria-hidden="true">
-              {filePillar && fileTargets.map(target => {
-                const points = elbow([filePillar.x, filePillar.y], [target.x, target.y]).map(([x, y]) => isoProject(cam, x, y, 3));
-                return <path key={target.id} className="ov-import" d={openPath(points)} />;
-              })}
-              {filePillar && (() => {
-                const [x, y] = isoProject(cam, filePillar.x, filePillar.y, 3);
-                return <ellipse className="ov-source" cx={x} cy={y} rx={Math.max(5, cam.scale * 14)} ry={Math.max(2.5, cam.scale * 7)} />;
-              })()}
-              {railMarks.packets.map(packet => <circle key={packet.key} className="ov-packet" r={2.6} cx={reduced ? packet.at[0] : 0} cy={reduced ? packet.at[1] : 0}>
-                {!reduced && <animateMotion dur="2.4s" repeatCount="indefinite" path={packet.d} />}
-              </circle>)}
-              {railMarks.labels.map(label => <g key={label.key} className={`ov-rail-label${label.written ? " is-written" : ""}`}>
-                <rect x={label.x - label.width / 2} y={label.y - label.height / 2} width={label.width} height={label.height} rx={6} />
-                <text x={label.x} y={label.y + 4}>{label.text}</text>
-              </g>)}
-            </svg>
           </div>
         </div>
+        <ConnectionCard focus={focusPart} groups={groups} nameOf={nameOf} rowKey={rowKey} onRow={setRowKey} onPick={id => { setRowKey(null); pick(id); }} />
       </div>
       <div className="overview-foot">
         {(() => {
@@ -381,43 +478,70 @@ export default function OverviewView({ graph, theme, pickedId, onSelectActor, on
           </div>;
           return narrow ? <details className="overview-parts-fold"><summary>Parts on the board <span className="atlas-mono atlas-muted">{chips.length}</span></summary>{list}</details> : list;
         })()}
-        <p className="atlas-muted overview-key">Blocks rest low; point at a part or zoom in and its blocks rise to full height, log of lines, capped. Rails: imports and written flows between parts. Drag to pan; pinch or Ctrl/⌘-scroll to zoom.</p>
+        <p className="atlas-muted overview-key">Point at a part to preview it; click to pin it. Its rails turn to dotted tracks, chevrons pointing into it from what it takes from and out of it toward what uses it. Blocks rest low and rise to full height (log of lines, capped) for the part in focus or when zoomed in. Drag to pan; pinch or Ctrl/⌘-scroll to zoom.</p>
       </div>
     </section>
-    {picked && <OverviewPick actor={picked} district={pickedDistrict} links={pickedLinks} nameOf={nameOf} graph={graph} journeys={journeys} onNavigate={onNavigate} onFollowJourney={onFollowJourney} onSelectActor={onSelectActor} />}
+    {picked && <OverviewPick actor={picked} district={pickedDistrict} graph={graph} journeys={journeys} onNavigate={onNavigate} onFollowJourney={onFollowJourney} />}
     <footer className="atlas-provenance">Districts and flows: written by hand. Files, lines and imports: read from code. <span>Figures: Hairline, MIT © Lucas Marques</span></footer>
   </>;
 }
 
-function OverviewPick({ actor, district, links, nameOf, graph, journeys, onNavigate, onFollowJourney, onSelectActor }: {
-  actor: StoryActor; district?: OverviewLayout["districts"][number]; links: OverviewLayout["connections"]; nameOf: (id: string) => string;
+/** The focused part's connections, off the board: what it takes from and
+ *  what uses it. Pointing at (or focusing) a row inks that one rail; a click
+ *  selects the other part. */
+function ConnectionCard({ focus, groups, nameOf, rowKey, onRow, onPick }: {
+  focus: string | null; groups: ReturnType<typeof connectionGroups> | null; nameOf: (id: string) => string;
+  rowKey: string | null; onRow: (key: string | null) => void; onPick: (id: string) => void;
+}) {
+  const section = (title: string, rows: ConnectionRow[], empty: string) => <CardGroup key={`${focus}:${title}`} title={title} rows={rows} empty={empty} nameOf={nameOf} rowKey={rowKey} onRow={onRow} onPick={onPick} />;
+  return <aside className="overview-panel" aria-label="Connections of the part in focus" aria-live="polite">
+    <div className="overview-panel-inner">
+      {focus && groups ? <>
+        <h2>{nameOf(focus)}</h2>
+        {section("Takes from", groups.takes, "Nothing comes in.")}
+        {section("Used by", groups.uses, "Nothing uses it.")}
+      </> : <>
+        <span className="atlas-kicker">Connections</span>
+        <p className="atlas-muted">Point at a part to preview what it takes from and what uses it. Click one to pin it here, then point at a row to trace that one rail.</p>
+      </>}
+    </div>
+  </aside>;
+}
+
+const CARD_ROWS = 4;
+
+function CardGroup({ title, rows, empty, nameOf, rowKey, onRow, onPick }: {
+  title: string; rows: ConnectionRow[]; empty: string; nameOf: (id: string) => string;
+  rowKey: string | null; onRow: (key: string | null) => void; onPick: (id: string) => void;
+}) {
+  const [all, setAll] = useState(false);
+  const shown = all ? rows : rows.slice(0, CARD_ROWS);
+  return <div className="ov-card-group">
+    <h3 className="atlas-kicker">{title} <span className="atlas-mono">{rows.length}</span></h3>
+    {rows.length ? <ul>{shown.map(row => <li key={row.key}>
+      <button className={row.key === rowKey ? "is-active" : undefined} onPointerEnter={() => onRow(row.key)} onPointerLeave={() => onRow(null)} onFocus={() => onRow(row.key)} onBlur={() => onRow(null)} onClick={() => onPick(row.other)}>
+        <span className="ov-card-name">{nameOf(row.other)}</span>
+        {row.label && <span className={row.written ? "ov-card-flow" : "ov-card-names atlas-mono"} title={row.written ? row.flows.join("\n") : row.names.join(", ")}>{row.written ? `“${row.label}”` : row.label}</span>}
+      </button>
+    </li>)}</ul> : <p className="atlas-muted">{empty}</p>}
+    {rows.length > CARD_ROWS && <button className="atlas-text-link ov-card-more" onClick={() => setAll(!all)}>{all ? "Show fewer" : `Show all ${rows.length}`}</button>}
+  </div>;
+}
+
+function OverviewPick({ actor, district, graph, journeys, onNavigate, onFollowJourney }: {
+  actor: StoryActor; district?: OverviewLayout["districts"][number];
   graph: RepositoryGraph; journeys: { journey: { name: string }; index: number }[];
-  onNavigate: (view: "territory" | "part") => void; onFollowJourney: (index: number) => void; onSelectActor: (id: string) => void;
+  onNavigate: (view: "territory" | "part") => void; onFollowJourney: (index: number) => void;
 }) {
   return <section className="overview-pick" aria-live="polite">
-    <div>
-      <span className="atlas-kicker">Selected part · Written</span>
-      <h2>{actor.name}</h2>
-      <p>{actor.blurb}</p>
-      <p className="atlas-muted atlas-mono">{district ? `${fmt(district.files)} product files${graph.stats.lineCountAvailable ? ` · ${fmt(district.lines)} lines` : ""} · Scanned` : "No files: a person or outside service"}</p>
-      <div className="overview-actions">
-        {district && <button className="atlas-pill-button" onClick={() => onNavigate("part")}>Inside a part</button>}
-        {district && <button className="atlas-pill-button" onClick={() => onNavigate("territory")}>Where it lives</button>}
-        {journeys.map(({ journey, index }) => <button key={index} className="atlas-text-link" onClick={() => onFollowJourney(index)}>Follow “{journey.name}” →</button>)}
-      </div>
-    </div>
-    <div>
-      <span className="atlas-kicker">Connections · {links.length}</span>
-      <ul className="overview-links">{links.slice(0, 12).map(link => {
-        const other = link.a === actor.id ? link.b : link.a;
-        return <li key={link.key}>
-          <button className="atlas-text-link" onClick={() => other !== GAP_ID && onSelectActor(other)}>{nameOf(other)}</button>
-          <span className="atlas-muted atlas-mono">{link.imports ? `${link.imports} import${link.imports === 1 ? "" : "s"}` : ""}{link.imports && link.flows.length ? " · " : ""}{link.flows.length ? `${link.flows.length} written flow${link.flows.length === 1 ? "" : "s"}` : ""}</span>
-          {link.names.length > 0 && <span className="atlas-mono overview-names">{crossingLabel(link.names, 6, 80)}</span>}
-          {link.flows[0] && <span className="overview-flow">“{link.flows[0].carries}”</span>}
-        </li>;
-      })}</ul>
-      {links.length > 12 && <p className="atlas-muted">{links.length - 12} more on the board.</p>}
+    <span className="atlas-kicker">Selected part · Written</span>
+    <h2>{actor.name}</h2>
+    <p>{actor.blurb}</p>
+    <p className="atlas-muted atlas-mono">{district ? `${fmt(district.files)} product files${graph.stats.lineCountAvailable ? ` · ${fmt(district.lines)} lines` : ""} · Scanned` : "No files: a person or outside service"}</p>
+    <div className="overview-actions">
+      {district && <button className="atlas-pill-button" onClick={() => onNavigate("part")}>Inside a part</button>}
+      {district && <button className="atlas-pill-button" onClick={() => onNavigate("territory")}>Where it lives</button>}
+      {journeys.map(({ journey, index }) => <button key={index} className="atlas-text-link" onClick={() => onFollowJourney(index)}>Follow “{journey.name}” →</button>)}
     </div>
   </section>;
 }

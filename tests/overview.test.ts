@@ -3,8 +3,8 @@ import test from "node:test";
 import { graph, node, story } from "./story-fixtures.ts";
 import {
   BOARD, BLOCK, GAP_ID, HEIGHT_MAX, HEIGHT_MIN, SMALL_LINES, blockHeight, buildOverviewLayout, isoBlock, plazaCells, restHeight, convexHull, crossingLabel, elbow, fitCamera, flooredAreas, groundAxes,
-  isoDepth, isoProject, layoutBounds, perimeterParam, perimeterPoint, placeLabels, plateLabel, pointAlong, quarterAzimuth, simplify,
-  type IsoCamera,
+  isoDepth, isoProject, layoutBounds, perimeterParam, perimeterPoint, plateLabel, quarterAzimuth, simplify, connectionGroups, railArrows, spanAt, wrapName,
+  type IsoCamera, type OverviewConnection,
 } from "../src/overview.ts";
 
 const cam = (az: number): IsoCamera => ({ az, k: 0.5, scale: 1, ox: 0, oy: 0 });
@@ -64,7 +64,6 @@ test("isoBox helpers: hull and simplification", () => {
   assert.deepEqual(convexHull([[0, 0], [2, 0], [1, 1], [2, 2], [0, 2]]).length, 4);
   assert.deepEqual(simplify([[0, 0], [5, 0], [10, 0], [10, 0], [10, 5], [10, 9]]), [[0, 0], [10, 0], [10, 9]]);
   assert.deepEqual(elbow([0, 0], [10, 20]), [[0, 0], [10, 0], [10, 20]]);
-  assert.deepEqual(pointAlong([[0, 0], [10, 0], [10, 10]], 0.75), [10, 5]);
 });
 
 test("floored areas give small parts room for a figure and still sum to the board", () => {
@@ -120,8 +119,6 @@ test("perimeter parameters round-trip to the nearest board edge", () => {
 test("crossing labels are bounded and counted", () => {
   assert.equal(crossingLabel(["a", "b", "c", "d"], 3), "a, b, c +1");
   assert.equal(crossingLabel(["averyveryverylongbindingnamethatoverflows"], 3, 12), "averyveryve…");
-  const kept = placeLabels([{ x: 0, y: 0, width: 40, height: 20 }, { x: 10, y: 5, width: 40, height: 20 }, { x: 200, y: 0, width: 40, height: 20 }], 5);
-  assert.equal(kept.length, 2);
 });
 
 function fixture() {
@@ -253,4 +250,79 @@ test("without a story every product file stands in the gap lot", () => {
   const layout = buildOverviewLayout({ ...fixture(), story: undefined as unknown as typeof story });
   assert.deepEqual(layout.districts.map(d => d.id), [GAP_ID]);
   assert.equal(layout.markers.length, 0);
+});
+
+test("connections split by direction: what a part takes from and what uses it", () => {
+  const layout = buildOverviewLayout(fixture());
+  const appCore = layout.connections.find(c => (c.a === "app" && c.b === "core") || (c.a === "core" && c.b === "app"))!;
+  const appSide = appCore.a === "app" ? appCore.ab : appCore.ba;
+  assert.deepEqual(appSide, { imports: 2, names: ["Job", "work"] }, "app imports core");
+  assert.deepEqual((appCore.a === "app" ? appCore.ba : appCore.ab).imports, 0);
+
+  // Core imports the gap and is imported by app; the story's written flow
+  // brings the work from app into core. So app appears in both groups.
+  const core = connectionGroups(layout.connections, "core");
+  assert.deepEqual(core.takes.map(row => [row.other, row.label, row.written]), [["app", "the work", true], [GAP_ID, "helper", false]]);
+  assert.deepEqual(core.uses.map(row => [row.other, row.label, row.written]), [["app", "Job, work", false]]);
+  assert.ok(core.takes.every(row => row.direction === "in") && core.uses.every(row => row.direction === "out"));
+  assert.notEqual(core.takes[0].key, core.uses[0].key, "one row per direction");
+
+  const app = connectionGroups(layout.connections, "app");
+  assert.deepEqual(app.takes.map(row => row.other).sort(), ["core", "user"]);
+  assert.equal(app.takes.find(row => row.other === "core")!.label, "Job, work");
+  assert.equal(app.takes.find(row => row.other === "user")!.label, "a request");
+  assert.deepEqual(app.uses.map(row => [row.other, row.label]), [["core", "the work"]]);
+
+  // Rails are oriented the way things travel: into the focused part for
+  // "takes from", out of it for "used by".
+  const plates = new Map(layout.districts.map(d => [d.id, d.plate]));
+  const onPlate = (p: [number, number], id: string) => { const r = plates.get(id)!; return p[0] >= r.x - 1e-6 && p[0] <= r.x + r.width + 1e-6 && p[1] >= r.y - 1e-6 && p[1] <= r.y + r.height + 1e-6; };
+  const inbound = core.takes.find(row => row.other === GAP_ID)!.rail;
+  assert.ok(onPlate(inbound[inbound.length - 1], "core") && onPlate(inbound[0], GAP_ID));
+  const outbound = core.uses[0].rail;
+  assert.ok(onPlate(outbound[0], "core") && onPlate(outbound[outbound.length - 1], "app"));
+  // A part with no connections has empty groups.
+  assert.deepEqual(connectionGroups(layout.connections, "nobody"), { takes: [], uses: [] });
+});
+
+test("connection rows bound their crossing names and fall back to the written flow", () => {
+  const base: OverviewConnection = { key: "x\u0000y", a: "x", b: "y", imports: 3, names: [], ab: { imports: 3, names: ["Alpha", "Beta", "Gamma", "Delta", "Epsilon"] }, ba: { imports: 0, names: [] }, flows: [{ from: "y", to: "x", carries: "a long sentence about what travels" }], forward: true, rail: [[0, 0], [10, 0]] };
+  const x = connectionGroups([base], "x", 3, 40);
+  assert.equal(x.takes.length, 1);
+  assert.equal(x.takes[0].label, "Alpha, Beta, Gamma +2");
+  assert.equal(x.takes[0].written, false);
+  assert.deepEqual(x.takes[0].flows, ["a long sentence about what travels"]);
+  assert.equal(x.uses.length, 0);
+  assert.deepEqual(x.takes[0].rail, [[10, 0], [0, 0]]);
+  // Seen from y: x uses y; names, not the flow (which arrives at x), label the row.
+  const y = connectionGroups([base], "y", 2, 12);
+  assert.equal(y.takes.length, 0, "the flow leaves y");
+  assert.equal(y.uses[0].label, "Alpha, Beta +3");
+  assert.deepEqual(y.uses[0].flows, ["a long sentence about what travels"]);
+  // Imports with no named bindings and no flow: the row stands with no label.
+  const bare = connectionGroups([{ ...base, ab: { imports: 1, names: [] }, flows: [] }], "x");
+  assert.equal(bare.takes[0].label, "");
+});
+
+test("rail chevrons point the way the rail runs and stay off its ends", () => {
+  const arrows = railArrows([[0, 0], [100, 0]], 40, 20);
+  assert.deepEqual(arrows.map(a => [a.x, a.y, a.angle]), [[20, 0, 0], [60, 0, 0]]);
+  const back = railArrows([[100, 0], [0, 0]], 40, 20);
+  assert.ok(back.every(a => Math.abs(Math.abs(a.angle) - 180) < 1e-9));
+  const turn = railArrows([[0, 0], [10, 0], [10, 50]], 30, 20);
+  assert.ok(close(turn[0].x, 10) && close(turn[0].y, 10) && close(turn[0].angle, 90));
+  // Too short for the spacing: one chevron at the middle.
+  assert.deepEqual(railArrows([[0, 0], [8, 0]], 40).map(a => a.x), [4]);
+  assert.deepEqual(railArrows([[0, 0]], 40), []);
+});
+
+test("the focused name fits across its plate: span and wrapping", () => {
+  const diamond: [number, number][] = [[0, -10], [20, 0], [0, 10], [-20, 0]];
+  assert.deepEqual(spanAt(diamond, 0), [-20, 20]);
+  assert.deepEqual(spanAt(diamond, 5), [-10, 10]);
+  assert.equal(spanAt(diamond, 20), null);
+  assert.deepEqual(wrapName("The native-worker connection", 30), ["The native-worker connection"]);
+  assert.deepEqual(wrapName("The native-worker connection", 20), ["The native-worker", "connection"]);
+  assert.deepEqual(wrapName("The native-worker connection", 10), ["The", "native-wo…"]);
+  assert.deepEqual(wrapName("Supercalifragilistic", 8, 1), ["Superca…"]);
 });

@@ -229,9 +229,12 @@ export interface OverviewConnection {
   imports: number;
   /** Bindings that cross, sorted. */
   names: string[];
+  /** Imports by direction: `ab` is a importing from b (a takes from b), `ba` the reverse. */
+  ab: { imports: number; names: string[] };
+  ba: { imports: number; names: string[] };
   /** Written flows between the two, as "carries" sentences. */
   flows: { from: string; to: string; carries: string }[];
-  /** True when the packet should travel a → b. */
+  /** True when the dominant traffic runs a → b (written flows first, else imports). */
   forward: boolean;
   rail: Point[];
 }
@@ -354,12 +357,12 @@ export function buildOverviewLayout(graph: RepositoryGraph, maxPillars = MAX_PIL
   const resolve = importTargetResolver(product);
   const productIds = new Set(product.map(file => file.id));
   const fileImports = new Map<string, Set<string>>();
-  const pairs = new Map<string, { a: string; b: string; imports: number; aImportsB: number; names: Set<string>; flows: OverviewConnection["flows"] }>();
+  const pairs = new Map<string, { a: string; b: string; imports: number; aImportsB: number; names: Set<string>; abNames: Set<string>; baNames: Set<string>; flows: OverviewConnection["flows"] }>();
   const pairKey = (x: string, y: string) => x < y ? `${x}\u0000${y}` : `${y}\u0000${x}`;
   const pairFor = (x: string, y: string) => {
     const key = pairKey(x, y);
     let pair = pairs.get(key);
-    if (!pair) { const [a, b] = x < y ? [x, y] : [y, x]; pair = { a, b, imports: 0, aImportsB: 0, names: new Set(), flows: [] }; pairs.set(key, pair); }
+    if (!pair) { const [a, b] = x < y ? [x, y] : [y, x]; pair = { a, b, imports: 0, aImportsB: 0, names: new Set(), abNames: new Set(), baNames: new Set(), flows: [] }; pairs.set(key, pair); }
     return pair;
   };
   if (graph.stats.importsAvailable) {
@@ -378,7 +381,8 @@ export function buildOverviewLayout(graph: RepositoryGraph, maxPillars = MAX_PIL
         const pair = pairFor(from, to);
         pair.imports += 1;
         if (pair.a === from) pair.aImportsB += 1;
-        for (const name of edge.symbols ?? []) pair.names.add(name);
+        const directed = pair.a === from ? pair.abNames : pair.baNames;
+        for (const name of edge.symbols ?? []) { pair.names.add(name); directed.add(name); }
       }
     }
   }
@@ -401,7 +405,11 @@ export function buildOverviewLayout(graph: RepositoryGraph, maxPillars = MAX_PIL
     const flowForward = pair.flows.filter(flow => flow.from === pair.a).length;
     const forward = pair.flows.length ? flowForward >= pair.flows.length - flowForward : pair.aImportsB * 2 >= pair.imports;
     const rail = router.route(anchors.get(pair.a)!, anchors.get(pair.b)!, pair.a, pair.b);
-    return { key: pairKey(pair.a, pair.b), a: pair.a, b: pair.b, imports: pair.imports, names: [...pair.names].sort(), flows: pair.flows, forward, rail };
+    return {
+      key: pairKey(pair.a, pair.b), a: pair.a, b: pair.b, imports: pair.imports, names: [...pair.names].sort(),
+      ab: { imports: pair.aImportsB, names: [...pair.abNames].sort() }, ba: { imports: pair.imports - pair.aImportsB, names: [...pair.baNames].sort() },
+      flows: pair.flows, forward, rail,
+    };
   });
 
   return {
@@ -594,22 +602,6 @@ export function polylineLength(points: Point[]): number {
   return length;
 }
 
-/** The point a share `t` of the way along a polyline: where a rail's label
- *  sits, pushed toward the far end so labels fan out to their destinations. */
-export function pointAlong(points: Point[], t: number): Point {
-  if (!points.length) return [0, 0];
-  let remaining = polylineLength(points) * Math.max(0, Math.min(1, t));
-  for (let i = 1; i < points.length; i += 1) {
-    const length = Math.hypot(points[i][0] - points[i - 1][0], points[i][1] - points[i - 1][1]);
-    if (remaining <= length && length > 0) {
-      const f = remaining / length;
-      return [points[i - 1][0] + (points[i][0] - points[i - 1][0]) * f, points[i - 1][1] + (points[i][1] - points[i - 1][1]) * f];
-    }
-    remaining -= length;
-  }
-  return points[points.length - 1];
-}
-
 /** A bounded label: at most `max` names, then "+n". */
 export function crossingLabel(names: string[], max = 3, chars = 34): string {
   const shown: string[] = [];
@@ -622,16 +614,82 @@ export function crossingLabel(names: string[], max = 3, chars = 34): string {
   return `${shown.join(", ")}${rest > 0 ? ` +${rest}` : ""}`;
 }
 
-/** Greedy, order-preserving placement: a box that overlaps an earlier one is
- *  dropped. The caller orders by importance. */
-export function placeLabels<T extends { x: number; y: number; width: number; height: number }>(boxes: T[], limit: number): T[] {
-  const kept: T[] = [];
-  for (const box of boxes) {
-    if (kept.length >= limit) break;
-    const overlaps = kept.some(other => Math.abs(other.x - box.x) * 2 < other.width + box.width + 6 && Math.abs(other.y - box.y) * 2 < other.height + box.height + 4);
-    if (!overlaps) kept.push(box);
+// --- Connections of one part -----------------------------------------------
+
+export interface ConnectionRow {
+  /** Unique per row: a pair can appear once in each group. */
+  key: string;
+  /** The connection (and so the rail) this row draws on. */
+  connection: string;
+  other: string;
+  /** "in": the focused part takes from `other`; "out": `other` uses it. */
+  direction: "in" | "out";
+  imports: number;
+  names: string[];
+  flows: string[];
+  /** The crossing names bounded with +n, or else the first written flow. */
+  label: string;
+  written: boolean;
+  /** The rail oriented the way things travel: into the focused part for
+   *  "in", out of it for "out". */
+  rail: Point[];
+}
+
+/** The focused part's connections, grouped the way How it works reads them:
+ *  "Takes from" (it imports the other, or a written flow arrives) and "Used
+ *  by" (the other imports it, or a written flow leaves). A pair with traffic
+ *  both ways appears in both groups. Heaviest first. */
+export function connectionGroups(connections: OverviewConnection[], focus: string, maxNames = 3, chars = 40): { takes: ConnectionRow[]; uses: ConnectionRow[] } {
+  const takes: ConnectionRow[] = [], uses: ConnectionRow[] = [];
+  for (const connection of connections) {
+    if (connection.a !== focus && connection.b !== focus) continue;
+    const isA = connection.a === focus;
+    const other = isA ? connection.b : connection.a;
+    // The focus importing the other: `ab` when it is a.
+    const imported = isA ? connection.ab : connection.ba;
+    const importedBy = isA ? connection.ba : connection.ab;
+    const toward = isA ? [...connection.rail].reverse() : connection.rail;
+    const away = isA ? connection.rail : [...connection.rail].reverse();
+    const row = (direction: "in" | "out", imports: { imports: number; names: string[] }, flows: string[], rail: Point[]): ConnectionRow | null => {
+      if (!imports.imports && !flows.length) return null;
+      const written = !imports.names.length && flows.length > 0;
+      const label = imports.names.length ? crossingLabel(imports.names, maxNames, chars) : flows[0] ?? "";
+      return { key: `${direction}:${connection.key}`, connection: connection.key, other, direction, imports: imports.imports, names: imports.names, flows, label, written, rail };
+    };
+    const inbound = row("in", imported, connection.flows.filter(flow => flow.to === focus).map(flow => flow.carries), toward);
+    const outbound = row("out", importedBy, connection.flows.filter(flow => flow.from === focus).map(flow => flow.carries), away);
+    if (inbound) takes.push(inbound);
+    if (outbound) uses.push(outbound);
   }
-  return kept;
+  const weight = (row: ConnectionRow) => row.imports + row.flows.length * 4;
+  const order = (p: ConnectionRow, q: ConnectionRow) => weight(q) - weight(p) || p.other.localeCompare(q.other);
+  return { takes: takes.sort(order), uses: uses.sort(order) };
+}
+
+/** Chevrons along a screen polyline, pointing the way it runs: one every
+ *  `spacing` units starting `offset` in, none closer than `margin` to either
+ *  end, and at least one at the middle of a rail too short for the spacing. */
+export function railArrows(points: Point[], spacing: number, offset = spacing / 2, margin = 6): { x: number; y: number; angle: number }[] {
+  const length = polylineLength(points);
+  if (length <= 0) return [];
+  const at = (distance: number) => {
+    let remaining = distance;
+    for (let i = 1; i < points.length; i += 1) {
+      const [a, b] = [points[i - 1], points[i]];
+      const segment = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      if (remaining <= segment && segment > 0) {
+        const f = remaining / segment;
+        return { x: a[0] + (b[0] - a[0]) * f, y: a[1] + (b[1] - a[1]) * f, angle: Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI };
+      }
+      remaining -= segment;
+    }
+    const [a, b] = [points[points.length - 2], points[points.length - 1]];
+    return { x: b[0], y: b[1], angle: Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI };
+  };
+  const out: { x: number; y: number; angle: number }[] = [];
+  for (let d = Math.max(margin, offset); d <= length - margin; d += spacing) out.push(at(d));
+  if (!out.length) out.push(at(length / 2));
+  return out;
 }
 
 class MinHeap {
@@ -666,4 +724,36 @@ class MinHeap {
     }
     return top;
   }
+}
+
+/** The horizontal run of a convex screen polygon at height `y`, or null when
+ *  the line misses it: how wide an upright label on a plate may be. */
+export function spanAt(polygon: Point[], y: number): [number, number] | null {
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < polygon.length; i += 1) {
+    const a = polygon[i], b = polygon[(i + 1) % polygon.length];
+    if ((a[1] - y) * (b[1] - y) > 0 || a[1] === b[1]) continue;
+    const x = a[0] + (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]);
+    lo = Math.min(lo, x); hi = Math.max(hi, x);
+  }
+  return lo <= hi ? [lo, hi] : null;
+}
+
+/** Breaks a name at spaces into at most `lines` lines of at most `width`
+ *  characters, ellipsising what still does not fit. */
+export function wrapName(text: string, width: number, lines = 2): string[] {
+  const max = Math.max(2, Math.floor(width));
+  const out: string[] = [];
+  let line = "";
+  const words = text.split(/\s+/).filter(Boolean);
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i];
+    const next = line ? `${line} ${word}` : word;
+    if (next.length <= max) { line = next; continue; }
+    if (line) out.push(line);
+    line = word;
+    if (out.length === lines - 1) { line = words.slice(i).join(" "); break; }
+  }
+  if (line) out.push(line);
+  return out.slice(0, lines).map(each => each.length > max ? `${each.slice(0, max - 1)}…` : each);
 }
