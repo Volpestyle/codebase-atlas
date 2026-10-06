@@ -4,6 +4,7 @@ pub mod cli;
 mod companion;
 mod imports;
 mod scanner;
+mod source_scope;
 mod story;
 mod story_authoring;
 mod symbols;

@@ -15,7 +15,7 @@ const MAX_NODES: usize = 4_000;
 const MAX_IMPORT_EDGES: usize = 20_000;
 const MAX_SYMBOLS: usize = 60_000;
 const MAX_TEXT_BYTES: u64 = 2 * 1024 * 1024;
-const GENERATED_DIRECTORIES: &[&str] = &[
+pub(crate) const GENERATED_DIRECTORIES: &[&str] = &[
     ".git",
     ".codebase-index",
     "node_modules",
@@ -44,6 +44,9 @@ pub struct RepositoryGraph {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) story: Option<Story>,
     pub(crate) warnings: Vec<String>,
+    /// Internal provenance; the serialized graph keeps its existing warnings list.
+    #[serde(skip)]
+    pub(crate) story_warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -426,7 +429,9 @@ impl ScanState {
         self.cap_symbols();
         attach_index_summaries(root, &mut self.nodes, &mut self.warnings);
         let node_ids = self.nodes.iter().map(|node| node.id.as_str()).collect();
-        let story = story::attach_story(root, &node_ids, &mut self.warnings);
+        let mut story_warnings = Vec::new();
+        let story = story::attach_story(root, &node_ids, &mut story_warnings);
+        self.warnings.extend(story_warnings.iter().cloned());
         drop(node_ids);
         self.nodes.sort_by(|left, right| left.id.cmp(&right.id));
         self.edges.sort_by(|left, right| {
@@ -476,6 +481,7 @@ impl ScanState {
             },
             story,
             warnings: self.warnings,
+            story_warnings,
         }
     }
 }

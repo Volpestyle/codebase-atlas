@@ -189,9 +189,9 @@ atlas story brief . > /tmp/atlas-story-brief.md
 atlas story check .
 ```
 
-The brief includes a compact scan digest, the existing story, and scan/validation warnings. The digest chooses the deepest uniform directory level that fits at most 150 modules, lists up to six exported declarations per module, and aggregates at most 150 import routes with up to eight crossing names each. Display labels are bounded; omitted entries are counted. It supplies facts for an agent to investigate, not prose inferred from imports.
+The brief includes a compact scan digest, the existing story, and scan/validation warnings. The digest chooses the deepest uniform directory level that fits at most 150 modules, partitions only product code into rows without ancestor repeats, collapses single-child chains, summarizes docs/config on one line, lists up to six exported declarations per module, and aggregates at most 150 import routes with up to eight crossing names each. Display labels are bounded; omitted entries are counted. It supplies facts for an agent to investigate, not prose inferred from imports.
 
-The check prints warnings to stderr and coverage to stdout. Coverage counts scanned product-source lines covered by the union of actor modules (a directory covers its descendants), excluding test/support paths, lockfiles, config nodes and `*.config.*` files, and documentation. It lists uncovered files largest first. Coverage is informational: a valid story exits 0 even with uncovered code; warnings or no usable story exit 1, and usage errors exit 2. Truncated scans and skipped line counts limit coverage to the available scan; warnings are reported rather than presenting it as whole-repository coverage.
+The check prints warnings to stderr and coverage to stdout. Coverage counts scanned product-source lines covered by the union of actor modules (a directory covers its descendants), following the [shared product-source scope](docs/writing-a-story.md#product-source-scope-and-checks): tests/support paths, hidden tooling, generated trees, lockfiles, config, and documentation are excluded. It lists uncovered files largest first. Coverage is informational: a valid story exits 0 even with uncovered code; story warnings or no usable story exit 1, and usage errors exit 2. Truncated scans and skipped line counts limit coverage to the available scan; other scan warnings are reported as information without invalidating the story.
 
 ## Development
 
@@ -250,6 +250,7 @@ src-tauri/src/
   symbols.rs              tree-sitter declaration and import extraction
   story.rs                story file parsing and validation against the scan
   story_authoring.rs      bounded authoring digest and coverage check
+  source_scope.rs         product-source exclusions shared by brief and coverage
   companion.rs            authenticated /v1 HTTP adapter
   bin/atlas.rs             atlas scan / serve entry point
   bin/scan.rs             compatibility alias for atlas scan

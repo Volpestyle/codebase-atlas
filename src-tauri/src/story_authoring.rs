@@ -8,6 +8,7 @@ use std::{
 };
 
 use crate::scanner::{EdgeKind, NodeKind, RepositoryGraph, RepositoryNode};
+use crate::source_scope::{excluded_path, is_config_source, is_product_source};
 
 const RULES: &str = include_str!("../../docs/writing-a-story.md");
 const MAX_MODULES: usize = 150;
@@ -16,22 +17,14 @@ const MAX_DECLARATIONS: usize = 6;
 const MAX_CROSSINGS: usize = 8;
 const MAX_LABEL_CHARS: usize = 240;
 const MAX_UNCOVERED: usize = 150;
-const SUPPORT_DIRS: &[&str] = &[
-    "test",
-    "tests",
-    "__tests__",
-    "spec",
-    "specs",
-    "e2e",
-    "fixtures",
-    "__mocks__",
-];
-
 /// A fresh scan's story validation and informational product-source coverage.
 #[derive(Debug)]
 pub struct StoryCheck {
     pub report: String,
+    /// Only story parsing/validation failures, including a missing usable story.
     pub warnings: Vec<String>,
+    /// Informational scan limitations and summary warnings; do not affect validity.
+    pub scan_warnings: Vec<String>,
     pub valid: bool,
 }
 
@@ -73,7 +66,13 @@ pub fn story_brief(path: &Path) -> Result<String, String> {
 /// Returns the same folder/access errors as `scan`.
 pub fn story_check(path: &Path) -> Result<StoryCheck, String> {
     let graph = crate::scan(path)?;
-    let mut warnings = graph.warnings.clone();
+    let mut warnings = graph.story_warnings.clone();
+    let scan_warnings = graph
+        .warnings
+        .iter()
+        .filter(|warning| !graph.story_warnings.contains(warning))
+        .cloned()
+        .collect();
     if graph.story.is_none() {
         warnings.push("No usable story exists at .codebase-index/_story.json.".to_owned());
     }
@@ -140,27 +139,8 @@ pub fn story_check(path: &Path) -> Result<StoryCheck, String> {
         valid: warnings.is_empty(),
         report,
         warnings,
+        scan_warnings,
     })
-}
-
-// Match model.ts's test layer, including support directories and filename
-// suffixes. Only source nodes enter the denominator, so docs/config stay out.
-fn is_product_source(node: &RepositoryNode) -> bool {
-    if node.kind != NodeKind::Source {
-        return false;
-    }
-    if node
-        .id
-        .split('/')
-        .any(|part| SUPPORT_DIRS.contains(&part.to_lowercase().as_str()))
-    {
-        return false;
-    }
-    let name = node.id.rsplit('/').next().unwrap_or(&node.id);
-    let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
-    ![".test", ".spec", "_test", ".config"]
-        .iter()
-        .any(|suffix| stem.ends_with(suffix))
 }
 
 fn module_id(id: &str, depth: usize) -> String {
@@ -189,13 +169,16 @@ struct Module {
 }
 
 fn digest(graph: &RepositoryGraph) -> String {
-    let max_depth = graph.nodes.iter().map(|node| node.depth).max().unwrap_or(0);
+    let files: Vec<_> = graph
+        .nodes
+        .iter()
+        .filter(|node| is_product_source(node))
+        .collect();
+    let max_depth = files.iter().map(|node| node.depth).max().unwrap_or(0);
     let depth = (0..=max_depth)
         .take_while(|depth| {
-            graph
-                .nodes
+            files
                 .iter()
-                .filter(|node| node.depth > 0 || *depth == 0)
                 .map(|node| module_id(&node.id, *depth))
                 .collect::<BTreeSet<_>>()
                 .len()
@@ -203,40 +186,51 @@ fn digest(graph: &RepositoryGraph) -> String {
         })
         .last()
         .unwrap_or(0);
+    let mut groups: BTreeMap<String, Vec<&RepositoryNode>> = BTreeMap::new();
+    for node in files {
+        groups
+            .entry(module_id(&node.id, depth))
+            .or_default()
+            .push(node);
+    }
     let mut modules: BTreeMap<String, Module> = BTreeMap::new();
     let mut node_modules = BTreeMap::new();
-    for node in &graph.nodes {
-        node_modules.insert(node.id.as_str(), module_id(&node.id, depth));
-        if node.depth <= depth && (node.depth > 0 || depth == 0) {
-            modules.insert(
-                node.id.clone(),
-                Module {
-                    lines: node.lines,
-                    declarations: BTreeSet::new(),
-                },
+    for (id, files) in groups {
+        let id = collapse_chain(&id, &files);
+        let mut module = Module::default();
+        for node in files {
+            node_modules.insert(node.id.as_str(), id.clone());
+            module.lines += node.lines;
+            module.declarations.extend(
+                node.symbols
+                    .iter()
+                    .filter(|symbol| symbol.exported)
+                    .map(|symbol| symbol.name.clone()),
             );
         }
+        modules.insert(id, module);
     }
-    for node in &graph.nodes {
-        if matches!(node.kind, NodeKind::Repository | NodeKind::Directory) {
-            continue;
-        }
-        for level in 0..=node.depth.min(depth) {
-            if let Some(module) = modules.get_mut(&module_id(&node.id, level)) {
-                module.declarations.extend(
-                    node.symbols
-                        .iter()
-                        .filter(|symbol| symbol.exported)
-                        .map(|symbol| symbol.name.clone()),
-                );
-            }
-        }
-    }
+    attach_directory_targets(graph, &mut node_modules);
+    let docs_config: u64 = graph
+        .nodes
+        .iter()
+        .filter(|node| {
+            !excluded_path(&node.id)
+                && (matches!(node.kind, NodeKind::Documentation | NodeKind::Config)
+                    || is_config_source(&node.id))
+        })
+        .map(|node| node.lines)
+        .sum();
     let mut output = format!(
-        "\n## Scan digest: {}\n\nDirectory level {depth}; {} modules. Directory lines include descendants; do not sum overlapping rows. Labels are limited to {MAX_LABEL_CHARS} characters.\n\n### Modules\n\n",
+        "\n## Scan digest: {}\n\nDirectory level {depth}; {} modules. Code modules appear once; single-child directory chains are collapsed. Labels are limited to {MAX_LABEL_CHARS} characters.\n\n### Modules\n\n",
         label(&graph.name),
         modules.len()
     );
+    writeln!(
+        output,
+        "Docs/config: {docs_config} lines (not listed as code modules).\n"
+    )
+    .expect("write string");
     for (id, module) in &modules {
         let names = module
             .declarations
@@ -267,11 +261,61 @@ fn digest(graph: &RepositoryGraph) -> String {
     output
 }
 
+fn attach_directory_targets<'a>(
+    graph: &'a RepositoryGraph,
+    node_modules: &mut BTreeMap<&'a str, String>,
+) {
+    // Directory import targets only lift when all their code belongs to one
+    // listed module. A target spanning several modules has no honest single
+    // endpoint at this grain, so report its omitted route rather than guess.
+    for node in graph
+        .nodes
+        .iter()
+        .filter(|node| matches!(node.kind, NodeKind::Directory | NodeKind::Repository))
+    {
+        let matches: BTreeSet<_> = node_modules
+            .iter()
+            .filter(|(path, _)| node.id == "." || path.starts_with(&format!("{}/", node.id)))
+            .map(|(_, module)| module.clone())
+            .collect();
+        if matches.len() == 1 {
+            node_modules.insert(node.id.as_str(), matches.into_iter().next().unwrap());
+        }
+    }
+}
+
+fn collapse_chain(id: &str, files: &[&RepositoryNode]) -> String {
+    let mut parts: Vec<_> = if id == "." {
+        Vec::new()
+    } else {
+        id.split('/').collect()
+    };
+    loop {
+        let next = files[0].id.split('/').nth(parts.len());
+        let Some(next) = next else {
+            break;
+        };
+        if files
+            .iter()
+            .any(|file| file.id.split('/').nth(parts.len()) != Some(next))
+        {
+            break;
+        }
+        parts.push(next);
+    }
+    if parts.is_empty() {
+        ".".to_owned()
+    } else {
+        parts.join("/")
+    }
+}
+
 fn append_routes(
     graph: &RepositoryGraph,
     node_modules: &BTreeMap<&str, String>,
     output: &mut String,
 ) {
+    let mut omitted = 0;
     let mut routes: BTreeMap<(&str, &str), (usize, BTreeSet<&str>)> = BTreeMap::new();
     for edge in graph
         .edges
@@ -282,6 +326,9 @@ fn append_routes(
             node_modules.get(edge.source.as_str()),
             node_modules.get(edge.target.as_str()),
         ) else {
+            if node_modules.contains_key(edge.source.as_str()) {
+                omitted += 1;
+            }
             continue;
         };
         if from == to {
@@ -318,6 +365,9 @@ fn append_routes(
                 .expect("write string");
         }
         output.push('\n');
+    }
+    if omitted > 0 {
+        writeln!(output, "{omitted} import edges omitted: their targets do not resolve to one listed code module.").expect("write string");
     }
     if routes.len() > MAX_ROUTES {
         writeln!(output, "{} more routes omitted.", routes.len() - MAX_ROUTES)
@@ -373,6 +423,17 @@ mod tests {
         write(root.path(), "package.json", "{}\n");
         write(root.path(), "Cargo.lock", "version = 4\n");
         write(root.path(), "vite.config.ts", "export default {};\n");
+        for path in [
+            ".claude/skills/third-party/tool.js",
+            ".github/scripts/ci.ts",
+            ".vscode/tool.ts",
+            "src/.tooling/tool.ts",
+            "src-tauri/gen/apple/main.swift",
+            "src-tauri/platform/gen/main.rs",
+        ] {
+            write(root.path(), path, "const tooling = 1;\n");
+        }
+
         story(root.path(), &["src/main.ts", "src/main.ts"]);
         let check = story_check(root.path()).unwrap();
         assert!(check.valid, "{:?}", check.warnings);
@@ -496,7 +557,7 @@ mod tests {
                     writeln!(body, "import {{ value }} from '../m{target}';").unwrap();
                 }
             }
-            write(root.path(), &format!("m{module}/index.ts"), &body);
+            write(root.path(), &format!("m{module}/leaf.ts"), &body);
         }
         let graph = crate::scan(root.path()).unwrap();
         let text = digest(&graph);
@@ -514,5 +575,65 @@ mod tests {
             label(&"a".repeat(1000)).chars().count(),
             MAX_LABEL_CHARS + 1
         );
+    }
+    #[test]
+    fn digest_partitions_code_without_ancestors_and_summarizes_docs_config() {
+        let root = tempfile::tempdir().unwrap();
+        for i in 0..80 {
+            write(
+                root.path(),
+                &format!("src/wrapper/core/group{i}/one.ts"),
+                "export const one = 1;\n",
+            );
+            write(
+                root.path(),
+                &format!("src/wrapper/core/group{i}/two.ts"),
+                "export const two = 2;\n",
+            );
+        }
+        write(root.path(), "LICENSE", "A license\n");
+        write(root.path(), "README.md", "Docs\n");
+        write(root.path(), "package.json", "{}\n");
+        write(root.path(), "vite.config.ts", "export default {};\n");
+        for path in [
+            ".claude/skills/vendor/tool.js",
+            ".github/tool.ts",
+            "src-tauri/gen/apple/main.swift",
+        ] {
+            write(root.path(), path, "const excluded = 1;\n");
+        }
+        write(root.path(), ".claude/vendor/README.md", "Hidden docs\n");
+        let text = digest(&crate::scan(root.path()).unwrap());
+        let rows = text
+            .split("### Modules\n\n")
+            .nth(1)
+            .unwrap()
+            .split("\n### Imports")
+            .next()
+            .unwrap();
+        let code: Vec<_> = rows.lines().filter(|line| line.starts_with("- ")).collect();
+        assert_eq!(code.len(), 80);
+        assert!(code.iter().all(
+            |line| line.starts_with("- src/wrapper/core/group") && line.contains(": 2 lines;")
+        ));
+        assert!(rows.contains("Docs/config: 4 lines"), "{rows}");
+        for name in [
+            ".claude",
+            ".github",
+            "src-tauri/gen",
+            "LICENSE",
+            "README.md",
+            "package.json",
+            "vite.config.ts",
+        ] {
+            assert!(!rows.contains(name), "unexpected row {name}: {rows}");
+        }
+        let graph = crate::scan(root.path()).unwrap();
+        let files: Vec<_> = graph
+            .nodes
+            .iter()
+            .filter(|node| is_product_source(node))
+            .collect();
+        assert_eq!(collapse_chain("src", &files), "src/wrapper/core");
     }
 }

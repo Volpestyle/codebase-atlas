@@ -36,3 +36,16 @@ The story view reads `.codebase-index/_story.json` from a local scan or, on the 
 This repository carries its own story at `.codebase-index/_story.json`. Scanning Atlas with Atlas is the shortest way to see what a finished one looks like.
 
 Author with `atlas story brief [REPOSITORY]`; validate and inspect product-source coverage with `atlas story check [REPOSITORY]`. Both default to the current directory. Atlas calls no model and writes no story: your coding agent reads the brief, checks the actual code where needed, and writes the file.
+
+## Product-source scope and checks
+
+Coverage and the brief’s code-module digest use the same rule, implemented in `src-tauri/src/source_scope.rs` for straightforward mirroring in the web story view:
+
+- Count only source files. Exclude configuration nodes, `*.config.*` files, lockfiles, documentation, and assets.
+- Exclude files inside any dot-directory (`.claude/`, `.github/`, `.vscode/`, and other directory segments starting with `.`). A dot-prefixed filename alone is not a directory exclusion.
+- Exclude generated directory segments from the scanner’s shared list: `.git`, `.codebase-index`, `node_modules`, `target`, `dist`, `build`, `.next`, `.turbo`, `coverage`, `vendor`, `Pods`, `DerivedData`. Also exclude any `gen/` directory below `src-tauri/`.
+- Exclude the existing test layer: `*.test.*`, `*.spec.*`, `*_test.*`, and files beneath `test`, `tests`, `__tests__`, `spec`, `specs`, `e2e`, `fixtures`, or `__mocks__` (support-directory matching ignores case).
+
+Actor modules cover their source files and descendants; overlapping actor modules count each file once. Coverage uses counted lines from the fresh scan and is informational. `atlas story check` exits 1 only for story validation warnings or no usable story. Other scan warnings, including truncation, skipped entries, and stale summaries, are printed as information and do not invalidate a story. A partial scan or unavailable line counts still limit what coverage can say.
+
+The brief partitions code files into at most 150 modules at the deepest level that fits, collapses single-child directory chains, and lists each module once without ancestor totals. Docs/config contribute one short line count, with the same hidden/generated exclusions. Import edges to directory targets are included when that directory resolves to one listed module; ambiguous or excluded targets are counted as omissions.

@@ -51,7 +51,7 @@ Usage:
 The repository defaults to the current directory.
 brief prints authoring rules, scan facts, the existing story, and warnings.
 check prints coverage to stdout and warnings to stderr; exits 0 for a valid
-story, 1 for warnings or no usable story, and 2 for usage errors.
+story, 1 for story warnings or no usable story, and 2 for usage errors.
 Atlas never calls a model or writes the story file.
 
 Options:
@@ -301,6 +301,9 @@ fn run_story(command: StoryCommand, repository: &std::path::Path) -> Result<u8, 
             for warning in &check.warnings {
                 eprintln!("atlas story: {warning}");
             }
+            for warning in &check.scan_warnings {
+                eprintln!("atlas story (scan information): {warning}");
+            }
             (check.report, u8::from(!check.valid))
         }
     };
@@ -442,6 +445,41 @@ mod tests {
             ]),
             0
         );
+        // Stale index prose is scan information, not a story validation failure.
+        std::fs::create_dir_all(root.path().join(".git/refs/heads")).unwrap();
+        std::fs::write(root.path().join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(
+            root.path().join(".git/refs/heads/main"),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join(".codebase-index/_root.md"),
+            "# Product\n\nA summary.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join(".codebase-index/.last-commit"),
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+        )
+        .unwrap();
+        let check = crate::story_check(root.path()).unwrap();
+        assert!(check.warnings.is_empty());
+        assert!(
+            check
+                .scan_warnings
+                .iter()
+                .any(|warning| warning.contains("behind HEAD"))
+        );
+        assert_eq!(
+            run(vec![
+                OsString::from("story"),
+                OsString::from("check"),
+                path.clone()
+            ]),
+            0
+        );
+
         std::fs::write(&story, r#"{"summary":"Product","actors":[{"id":"core","name":"Core","role":"core","blurb":"Works","modules":["gone"]}],"flows":[]}"#).unwrap();
         assert_eq!(
             run(vec![
