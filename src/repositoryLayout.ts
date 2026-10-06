@@ -83,7 +83,7 @@ interface Rect {
 // full, config/data lines are discounted (serialized JSON is not code), and
 // binary assets contribute only a small presence weight so a folder of images
 // cannot dominate the map.
-function fileWeight(node: RepositoryNode, lineCountAvailable: boolean): number {
+export function fileWeight(node: RepositoryNode, lineCountAvailable: boolean): number {
   if (node.kind === "asset") return Math.max(0.5, Math.min(64, node.sizeBytes / 2048));
   const dataDiscount = node.kind === "config" ? 0.25 : 1;
   const value = lineCountAvailable ? node.lines : node.sizeBytes / 64;

@@ -69,11 +69,12 @@ const isDesktopRuntime = isTauriRuntime && navigator.maxTouchPoints < 2;
 // Granularity slider range; the top stop renders every depth.
 // Story first: it is the only view that opens with sentences instead of 987
 // modules, so it is what a reader meets before the reference views.
-const VIEW_MODES = ["story", "map", "flow"] as const;
+const VIEW_MODES = ["story", "territory", "map", "flow"] as const;
 type ViewMode = (typeof VIEW_MODES)[number];
 
 const VIEW_INDEX: Record<ViewMode, string> = {
   story: "B.02 / How it works",
+  territory: "Where it lives",
   map: "B.02 / Orthographic",
   flow: "B.02 / Import flow",
 };
@@ -887,7 +888,7 @@ function App() {
   const contained = graph && selectedNode ? childNodes(graph, selectedNode.id) : [];
 
   return (
-    <div className={`app-shell${view === "story" ? " atlas-shell" : ""}`} ref={shellRef} style={panelStyle}>
+    <div className={`app-shell${view === "story" || view === "territory" ? " atlas-shell" : ""}`} ref={shellRef} style={panelStyle}>
       <a className="skip-link" href="#repository-map">
         Skip to code map
       </a>
@@ -1205,6 +1206,7 @@ function App() {
         <div className="atlas-brand"><strong>atlas</strong><span>{graph?.name ?? "No source"} · {graph?.branch ?? "—"}</span></div>
         <nav className="atlas-nav" aria-label="Lens">
           <button aria-current={view === "story" ? "page" : undefined} onClick={() => setView("story")}>How it works</button>
+          <button aria-current={view === "territory" ? "page" : undefined} onClick={() => setView("territory")}>Where it lives</button>
           <details className="atlas-more"><summary>More views</summary><div>
             <button onClick={() => setView("map")}>3D map</button><button onClick={() => setView("flow")}>Import flow</button>
           </div></details>
@@ -1290,7 +1292,7 @@ function App() {
         </div></details>
       </header>
 
-      {view === "story" && graph ? <AtlasWorkspace key={graph.root} theme={theme} graph={graph} searchQuery={searchQuery} onSearch={setSearchQuery} searchRef={searchRef} results={filteredNodes} selectedId={selectedId} onOpenFile={id => { setView("map"); selectNode(id); }} /> : (
+      {(view === "story" || view === "territory") && graph ? <AtlasWorkspace view={view} key={graph.root} theme={theme} graph={graph} searchQuery={searchQuery} onSearch={setSearchQuery} searchRef={searchRef} results={filteredNodes} selectedId={selectedId} onOpenFile={id => { setView("territory"); selectNode(id); }} /> : (
       <div className="workspace" ref={workspaceRef}>
         <button
           className={`workspace-curtain ${railOpen || inspectorOpen ? "is-active" : ""}`}
