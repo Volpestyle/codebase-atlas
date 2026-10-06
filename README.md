@@ -27,7 +27,10 @@ flowchart LR
     F --> G
     O --> G
     R --> G
+    GH --> W[TypeScript story validation<br/>against the mapped tree]
+    W --> G
     GH --> G
+    M --> GH
     M[".codebase-index/_story.json"] --> C
     G --> I[Searchable module index]
     G --> J[Three.js orthographic scene]
@@ -41,14 +44,14 @@ flowchart LR
     N --> K
 ```
 
-`codebase_atlas_lib` is the product boundary. Its public `scan` and `scan_json` functions produce the canonical serializable `RepositoryGraph`; the `atlas` CLI, `/v1` HTTP server, and Tauri commands are thin adapters over that API. The core/API/CLI is the default Cargo build and has no Tauri runtime dependency; Tauri enables the `app` feature for the desktop and mobile wrapper. React renders graphs and owns interaction state, but it does not scan local repositories. The browser-only GitHub adapter produces the same graph contract from GitHub's public repository and recursive Trees APIs. None of these sources send file contents into the scene.
+`codebase_atlas_lib` is the product boundary. Its public `scan` and `scan_json` functions produce the canonical serializable `RepositoryGraph`; the `atlas` CLI, `/v1` HTTP server, and Tauri commands are thin adapters over that API. The core/API/CLI is the default Cargo build and has no Tauri runtime dependency; Tauri enables the `app` feature for the desktop and mobile wrapper. React renders graphs and owns interaction state, but it does not scan local repositories. The browser-only GitHub adapter produces the same graph contract from GitHub's public repository and recursive Trees APIs, plus the Contents API when a committed story is present. None of these sources send file contents into the scene.
 
 ## Design Decisions
 
 - **Core-first adapters:** local repository analysis lives in the Rust library API. CLI, HTTP, and Tauri translate their input into that API and return its graph unchanged. This keeps agents, shell scripts, paired devices, and the desktop UI on one implementation instead of allowing the UI to become the product backend.
 - **Companion over LAN or Tailscale:** the iPad app does not clone repositories. The desktop app (Share) or `atlas serve` listens on port 7420, advertises Wi-Fi and Tailscale addresses, and returns the same scan graph the desktop would draw. A pairing code gates catalog and scan; requested paths must sit under a folder the host has shared. HTTP on the tailnet is still encrypted by Tailscale; on local Wi-Fi the token is the access control. iPad connects with **Computer** — hostname.local, a LAN IP, or a Tailscale name / `100.x` address.
 - **Native scanning:** Rust owns filesystem traversal so directory access remains outside the webview and behaves consistently across desktop platforms.
-- **Native GitHub hierarchy:** the web source uses GitHub's repository and recursive Trees APIs rather than cloning repositories or proxying source through another server.
+- **Native GitHub hierarchy:** the web source uses GitHub's repository and recursive Trees APIs rather than cloning repositories or proxying source through another server. If the default branch commits `.codebase-index/_story.json`, one additional Contents API request reads it and validates it against the mapped tree.
 - **Source-control-aware traversal:** the `ignore` crate applies `.gitignore`, `.ignore`, global Git excludes, and common generated-directory exclusions. A hand-written ignore parser would be less correct.
 - **Language-agnostic graph:** nodes and containment edges model structure consistently across mixed-language repositories.
 - **Parsed import edges:** local scans parse each TypeScript, JavaScript, and Rust file with tree-sitter and read its import sites — `import`/`require`/dynamic `import()` forms, module-relative `new URL(path, import.meta.url)` dependencies, and `use` declarations — then resolve each specifier against the scanned tree: relative paths, workspace `package.json` names, and workspace crate names. Specifiers that do not resolve to a scanned file or directory (external packages, standard libraries) are dropped rather than guessed at, so every drawn edge points at real code. A real parse is what makes grouped and multi-line forms (`use crate::{a::B, c}`) resolve as precisely as the single-path form they abbreviate, and what lets `use super::*` inside a `mod tests` block name the file around it instead of inventing an edge to the crate root. This is deliberately still not a compiler: tsconfig path aliases, re-export chains, and dynamic module schemes are out of scope.
@@ -89,7 +92,7 @@ flowchart LR
 - **Sentences live in the caption, not on the arc:** a column gap is narrower than a sentence, so on-arc labels either truncate to nothing or paint over the next card. Hovering an arc or playing a journey puts the full text in one roomy caption bar at full size instead.
 - **A journey brings the reader along:** the diagram is wider than the panel on any real repository, so playing a journey scrolls the current hop into view, lights it, keeps what it has already visited legible, and dims the rest. Width stops mattering when the view follows the data for you.
 - **The story is validated against the scan:** actor ids, flow endpoints, journey steps, and module paths are all checked against the tree that was just scanned. What no longer resolves is dropped and reported as a scan warning, so a story that has drifted from the code still renders the part that is true — the expected failure of a hand-written file that outlives a rename.
-- **Honest metrics:** local scans count lines from bounded text files. GitHub Trees provide file sizes but not contents, so GitHub maps encode size and mark line counts and import edges unavailable.
+- **Honest metrics:** local scans count lines from bounded text files. GitHub Trees provide file sizes but not contents, so GitHub maps encode size and mark line counts and import edges unavailable. The web reads a committed story at no model cost; it does not fetch per-file summaries or source contents. A failed story fetch warns without failing the map.
 - **Bounded work:** scans stop at 4,000 nodes, the scene renders at most 700 nodes, local line counting skips files larger than 2 MiB, and the symbol index stops at 128 declarations per file and 60,000 overall so a generated surface cannot bloat a map that also travels to a paired device. Full scan statistics and the searchable index remain available when rendering is capped.
 - **Event-driven rendering:** the scene redraws for camera or state changes instead of running a permanent animation loop.
 - **In-repo design system:** the technical-manual olive/paper look lives in `src/ui/` as three layers — `tokens.css` (every color, surface, and type size as CSS custom properties, including the kind palette and the 3D map palette), `ui.css` plus small React primitives (`SectionHeading`, `Seg`, `Stat`, `Register`, `KindMark`) for markup patterns used across features, and `theme.ts`, which reads the tokens off the document so the Three.js scene and canvas labels follow the same palette. Restyling means editing tokens, not chasing literals; an external component library was rejected because the aesthetic is bespoke and the primitive count is small.
@@ -173,7 +176,7 @@ flowchart LR
 
 ## Writing a story
 
-The story view reads `.codebase-index/_story.json`. It is written by hand (or by an agent that maintains the index), not derived, because the parts that matter most to a reader — the person typing, the chat service, the model being called — are not files in the repository.
+The story view reads `.codebase-index/_story.json` from a local scan or, on the web, from the public GitHub repository’s default branch. Commit the file to make the story available on the web; no model call is needed. It is written by hand (or by an agent that maintains the index), not derived, because the parts that matter most to a reader — the person typing, the chat service, the model being called — are not files in the repository.
 
 ```json
 {
@@ -203,6 +206,7 @@ The story view reads `.codebase-index/_story.json`. It is written by hand (or by
 - `carries` and `returns` are sentences, not type names. One arrow carries both directions.
 - `steps` are actor ids. Consecutive pairs need a flow in one direction or the other; a step taken against a flow reads as its `returns`.
 - Everything is checked against the scanned tree. Unknown ids and stale paths are dropped and reported as scan warnings rather than failing the scan, so the story keeps rendering the part that is still true.
+- Missing stories produce no warning. Files over 256 KiB, malformed JSON, invalid field types, or unknown roles are rejected with a warning; the rest of the map still loads.
 - `.codebase-index/` itself is not scanned, so a story cannot list itself as one of an actor's modules.
 
 This repository carries its own story at `.codebase-index/_story.json`. Scanning Atlas with Atlas is the shortest way to see what a finished one looks like.
@@ -249,6 +253,7 @@ src/
   flowLayout.ts           import-direction chip layout
   StoryScene.tsx          narrative diagram, hover, and journey playback
   storyLayout.ts          role-as-column placement and journey hops
+  storyValidation.ts      web story parsing and validation against the map
   companion.ts            LAN / Tailscale companion client
   github-url.ts           GitHub URL validation
   github.ts               GitHub API and tree-to-graph adapter
@@ -267,4 +272,4 @@ src-tauri/src/
   bin/serve.rs            compatibility alias for atlas serve
 ```
 
-Repository access is read-only. Local scans read metadata and bounded text files to count lines. GitHub scans make two unauthenticated requests to `api.github.com` and support public repositories only.
+Repository access is read-only. Local scans read metadata and bounded text files to count lines. GitHub scans make two unauthenticated requests to `api.github.com`, plus one Contents API request when the tree includes a story within the 256 KiB limit, and support public repositories only. `.codebase-index/` stays out of the map.

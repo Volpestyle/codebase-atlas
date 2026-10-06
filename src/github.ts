@@ -1,4 +1,5 @@
 import { parseGitHubRepositoryUrl } from "./github-url.ts";
+import { MAX_STORY_BYTES, readStory } from "./storyValidation.ts";
 import type {
   RepositoryEdge,
   RepositoryGraph,
@@ -50,12 +51,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-async function githubJson(url: string, notFoundMessage: string): Promise<unknown> {
+async function githubResponse(
+  url: string,
+  notFoundMessage: string,
+  accept = "application/vnd.github+json",
+): Promise<Response> {
   let response: Response;
   try {
     response = await fetch(url, {
       headers: {
-        Accept: "application/vnd.github+json",
+        Accept: accept,
         "X-GitHub-Api-Version": API_VERSION,
       },
     });
@@ -76,7 +81,11 @@ async function githubJson(url: string, notFoundMessage: string): Promise<unknown
     throw new Error(`GitHub could not load this repository (HTTP ${response.status}).`);
   }
 
-  return response.json();
+  return response;
+}
+
+async function githubJson(url: string, notFoundMessage: string): Promise<unknown> {
+  return (await githubResponse(url, notFoundMessage)).json();
 }
 
 function repositoryResponse(value: unknown): GitHubRepositoryResponse {
@@ -331,5 +340,32 @@ export async function scanGitHubRepository(input: string): Promise<RepositoryGra
       "GitHub could not find the repository's default branch.",
     ),
   );
-  return githubTreeToGraph(repository, tree);
+  const graph = githubTreeToGraph(repository, tree);
+  const storyEntry = tree.tree.find(
+    (entry) => entry.path === ".codebase-index/_story.json" && entry.type === "blob",
+  );
+  if (storyEntry) {
+    if ((storyEntry.size ?? 0) > MAX_STORY_BYTES) {
+      graph.warnings.push("The story file is too large to read.");
+    } else {
+      try {
+        const response = await githubResponse(
+          `${base}/contents/.codebase-index/_story.json?ref=${encodeURIComponent(repository.default_branch)}`,
+          "Could not read the story file.",
+          "application/vnd.github.raw+json",
+        );
+        const bytes = await response.arrayBuffer();
+        if (bytes.byteLength > MAX_STORY_BYTES) {
+          graph.warnings.push("The story file is too large to read.");
+        } else {
+          const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+          const story = readStory(text, new Set(graph.nodes.map((node) => node.id)), graph.warnings);
+          if (story) graph.story = story;
+        }
+      } catch {
+        graph.warnings.push("Could not read the story file.");
+      }
+    }
+  }
+  return graph;
 }
