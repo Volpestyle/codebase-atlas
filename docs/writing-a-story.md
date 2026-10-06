@@ -1,6 +1,6 @@
 # Writing a story
 
-The story view reads `.codebase-index/_story.json` from a local scan or, on the web, from the public GitHub repository’s default branch. Commit the file to make the story available on the web; no model call is needed. It is written by hand (or by an agent that maintains the index), not derived, because the parts that matter most to a reader — the person typing, the chat service, the model being called — are not files in the repository.
+The Atlas workspace reads `.codebase-index/_story.json` from a local scan or, on the web, from the public GitHub repository’s default branch. Commit the file to make the story available on the web; no model call is needed. It is written by hand (or by an agent that maintains the index), not derived, because the parts that matter most to a reader — the person typing, the chat service, the model being called — are not files in the repository.
 
 ```json
 {
@@ -39,7 +39,7 @@ Author with `atlas story brief [REPOSITORY]`; validate and inspect product-sourc
 
 ## Product-source scope and checks
 
-Coverage and the brief’s code-module digest use the same rule, implemented in `src-tauri/src/source_scope.rs` for straightforward mirroring in the web story view:
+Coverage and the brief’s code-module digest use the same rule, implemented in `src-tauri/src/source_scope.rs` for straightforward mirroring in the web territory screen:
 
 - Count only source files. Exclude configuration nodes, `*.config.*` files, lockfiles, documentation, and assets.
 - Exclude files inside any dot-directory (`.claude/`, `.github/`, `.vscode/`, and other directory segments starting with `.`). A dot-prefixed filename alone is not a directory exclusion.

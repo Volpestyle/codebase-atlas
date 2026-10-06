@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "summary": "Codebase Atlas reads a folder of code and draws it three ways. It never runs the code or changes it — it reads the files, works out which ones use which, and turns that into a map you can look around, a diagram of how work flows between the parts, and a plain-English story of what the whole thing does. The story is the only part it cannot work out on its own: somebody writes that down, and Atlas checks it against what it just read.",
+  "summary": "Codebase Atlas reads a folder of code and joins scanned facts with a hand-written story. Follow a journey to see what travels between parts, find those parts in the files, and look inside a part at its declarations and imports. It never runs or changes the code. Somebody writes the story; Atlas checks it against the files it read.",
   "actors": [
     {
       "id": "reader",
@@ -75,7 +75,12 @@
       "role": "core",
       "blurb": "Reads the hand-written story and throws out any part that no longer matches the code, saying which.",
       "modules": [
-        "src-tauri/src/story.rs"
+        "src-tauri/src/story.rs",
+        "src/storyValidation.ts",
+        "src/storyFigures.ts",
+        "src-tauri/src/story_authoring.rs",
+        "src-tauri/src/source_scope.rs",
+        "src/sourceScope.ts"
       ],
       "figure": "sieve"
     },
@@ -94,12 +99,23 @@
       "id": "views",
       "name": "The three views",
       "role": "core",
-      "blurb": "The story you land on, the map you fly over, and the flow diagram of what uses what.",
+      "blurb": "Follow the data, find its territory in the files, then inspect a part’s declarations and imports.",
       "modules": [
-        "src/StoryScene.tsx",
-        "src/RepositoryScene.tsx",
-        "src/FlowScene.tsx",
-        "src/App.tsx"
+        "src/App.tsx",
+        "src/AtlasWorkspace.tsx",
+        "src/JourneyView.tsx",
+        "src/TerritoryView.tsx",
+        "src/PartView.tsx",
+        "src/PartDetails.tsx",
+        "src/storyFacts.ts",
+        "src/transitLayout.ts",
+        "src/territory.ts",
+        "src/partDeclarations.ts",
+        "src/treemap.ts",
+        "src/journey.ts",
+        "src/ui/PartFigure.tsx",
+        "src/ui/useTheme.ts",
+        "src/ui/useReducedMotion.ts"
       ],
       "figure": "exploded"
     },
@@ -134,7 +150,7 @@
       "from": "reader",
       "to": "desktop",
       "carries": "a folder to look at",
-      "returns": "a map, a flow diagram, and a story to read"
+      "returns": "a journey to follow, files to explore, and a part to look inside"
     },
     {
       "from": "agent",
@@ -210,7 +226,7 @@
     {
       "from": "views",
       "to": "reader",
-      "carries": "a story to follow, a map to fly over, and routes to open"
+      "carries": "a story to follow, its territory in the files, and the names inside each part"
     }
   ],
   "journeys": [

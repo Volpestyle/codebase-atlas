@@ -1,13 +1,13 @@
-import { useState, type RefObject } from "react";
+import { useEffect, useState, type RefObject } from "react";
 import type { RepositoryGraph, RepositoryNode } from "./model";
 import PartView from "./PartView";
-import { actorExchanges } from "./storyFacts";
+import { actorExchanges, ownerForNode } from "./storyFacts";
 import { ExchangeList } from "./PartDetails";
 import TerritoryView from "./TerritoryView";
 import { storyCoverage } from "./territory";
 import JourneyView from "./JourneyView";
 import type { Theme } from "./ui/useTheme";
-import { journeyHops } from "./storyLayout";
+import { journeyHops } from "./journey";
 
 export interface AtlasWorkspaceProps {
   view: "story" | "territory" | "part";
@@ -28,6 +28,13 @@ export default function AtlasWorkspace(props: AtlasWorkspaceProps) {
   const [playing, setPlaying] = useState(false);
   const [actorId, setActorId] = useState("reader-engine");
   const actor = props.graph.story?.actors.find(part => part.id === actorId) ?? props.graph.story?.actors.find(part => part.modules?.length) ?? props.graph.story?.actors[0];
+  useEffect(() => {
+    if (props.selectedId && props.graph.story) {
+      const owner = ownerForNode(props.graph.story, props.selectedId);
+      if (owner) setActorId(owner);
+    }
+  }, [props.selectedId, props.graph.story]);
+  useEffect(() => { setPlaying(false); }, [props.view]);
   const exchanges = actor && props.graph.story ? actorExchanges(props.graph.story, actor) : null;
   const coverage = storyCoverage(props.graph);
   return <div className="atlas-workspace" id="repository-map">
@@ -46,6 +53,7 @@ export default function AtlasWorkspace(props: AtlasWorkspaceProps) {
       <p>Parts and journeys are written by hand. Files, imports, and names are read from the code.</p>
     </aside>
     <main className="atlas-main">
+      {props.graph.warnings?.length > 0 && <details className="atlas-warnings"><summary>{props.graph.warnings.length} scan warning{props.graph.warnings.length === 1 ? "" : "s"}</summary><ul>{props.graph.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></details>}
       {props.view === "part" && actor ? <PartView graph={props.graph} actor={actor} theme={props.theme} onSelectActor={setActorId} onOpenFile={props.onOpenFile} /> : props.view === "territory" ? <TerritoryView graph={props.graph} actor={actor} journeyIndex={journeyIndex} onSelectActor={setActorId} onOpenFile={props.onOpenFile} selectedId={props.selectedId} onInside={() => props.onNavigate("part")} /> : props.graph.story ? <JourneyView key={journeyIndex} graph={props.graph} theme={props.theme} journeyIndex={journeyIndex} step={step} playing={playing} onStep={setStep} onPlaying={setPlaying} actor={actor!} onSelectActor={setActorId} onOpenFile={props.onOpenFile} onInside={() => props.onNavigate("part")} /> : <section className="atlas-empty">
         <h1>No story <em>yet</em>.</h1>
         <p>The code map works without a story. Ask your coding agent to read <code>atlas story brief .</code>, write <code>.codebase-index/_story.json</code>, then run <code>atlas story check .</code>.</p>

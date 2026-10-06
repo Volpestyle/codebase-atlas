@@ -1,115 +1,64 @@
 # Codebase Atlas
 
-Codebase Atlas is a read-only repository graph engine with a Rust API, CLI, HTTP API, and interactive visualizer for local directories and public GitHub repositories. It opens on a plain-English story of how the code works — the parts a reader would recognize and what travels between them — and drills into two reference views over the same repository: an orthographic 3D field with searchable modules, language statistics, import flow arcs, layer controls, and a synchronized inspector, and an import-flow diagram.
+Codebase Atlas is a read-only repository graph engine with a Rust library, CLI, HTTP API, and interactive visualizer. It joins **facts read from code** — files, imports, names and declarations — with **prose written by hand** — parts, flows and journeys. Follow the data, locate its files, then look inside a part.
 
-The interface uses a monochrome Hairline palette, offline Geist fonts and Instrument Serif accents. Theme follows the system until a Light/Dark preference is saved on the device.
-
-The application runs as a web app, a Tauri 2 desktop app on macOS, Windows, and Linux, and a Tauri iOS app on iPhone and iPad. It uses React 19, TypeScript, and Three.js.
+The React 19 + TypeScript interface runs on the web, Tauri 2 desktop (macOS, Windows and Linux), and Tauri iOS (iPhone and iPad). Its monochrome Hairline figures and Geist / Instrument Serif fonts are bundled for offline use. Light/Dark follows the system until a device preference is saved.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    CLI[atlas CLI] --> API[codebase_atlas_lib API]
-    HTTP[HTTP /v1 API] --> API
-    Tauri[Tauri commands] --> API
-    UI[React UI] --> Tauri
-    UI --> HTTP
-    UI --> GH[Browser GitHub adapter]
-    API --> C[Rust scanner]
-    C --> D[gitignore-aware traversal]
-    C --> E[file classification and metrics]
-    C --> F[Git branch detection]
-    C --> O[tree-sitter symbol and import extraction]
-    O --> R[import resolution]
-    C --> V[story validation<br/>against the scanned tree]
-    V --> G
-    D --> G[RepositoryGraph]
-    E --> G
-    F --> G
-    O --> G
-    R --> G
-    GH --> W[TypeScript story validation<br/>against the mapped tree]
-    W --> G
-    GH --> G
-    M --> GH
-    M[".codebase-index/_story.json"] --> C
-    G --> B[Story brief and coverage check]
-    A[docs/writing-a-story.md] --> B
-    G --> I[Searchable module index]
-    G --> J[Three.js orthographic scene]
-    G --> P[SVG import flow diagram]
-    G --> N[Journey transit map and part cards]
-    G --> K[Node inspector]
-    I <--> J
-    I <--> P
-    J <--> K
-    P <--> K
-    N --> K
+  CLI[atlas CLI] --> API[codebase_atlas_lib]
+  HTTP[HTTP /v1 API] --> API
+  Tauri[Tauri commands] --> API
+  API --> Scanner[gitignore-aware Rust scanner]
+  Scanner --> Parse[tree-sitter declarations and imports]
+  Parse --> Graph[RepositoryGraph]
+  Scanner --> Graph
+  Story[.codebase-index/_story.json] --> Validate[Story validation]
+  Validate --> Graph
+  Scanner --> Validate
+  GH[Browser GitHub adapter] --> Web[TypeScript story validation]
+  Story --> GH
+  GH --> Graph
+  Web --> Graph
+  Graph --> Brief[Story brief and check]
+  Graph --> UI[Search and Hairline workspace]
+  UI --> Journey[How it works]
+  UI --> Territory[Where it lives]
+  UI --> Part[Inside a part]
 ```
 
-`codebase_atlas_lib` is the product boundary. Its public `scan` and `scan_json` functions produce the canonical serializable `RepositoryGraph`; the `atlas` CLI, `/v1` HTTP server, and Tauri commands are thin adapters over that API. The core/API/CLI is the default Cargo build and has no Tauri runtime dependency; Tauri enables the `app` feature for the desktop and mobile wrapper. React renders graphs and owns interaction state, but it does not scan local repositories. The browser-only GitHub adapter produces the same graph contract from GitHub's public repository and recursive Trees APIs, plus the Contents API when a committed story is present. None of these sources send file contents into the scene.
+`codebase_atlas_lib` owns analysis. Its `scan` and `scan_json` functions produce the canonical `RepositoryGraph`; CLI, HTTP and Tauri are thin adapters. Core/API/CLI is the default Cargo build without a Tauri dependency; the native wrapper enables the `app` feature. The browser GitHub adapter produces the same contract using public repository and recursive Trees APIs plus one optional Contents request for a committed story. React renders the graph and owns interaction state. It does not scan the local filesystem.
 
 ## Design Decisions
 
-- **Core-first adapters:** local repository analysis lives in the Rust library API. CLI, HTTP, and Tauri translate their input into that API and return its graph unchanged. This keeps agents, shell scripts, paired devices, and the desktop UI on one implementation instead of allowing the UI to become the product backend.
-- **Companion over LAN or Tailscale:** the iPad app does not clone repositories. The desktop app (Share) or `atlas serve` listens on port 7420, advertises Wi-Fi and Tailscale addresses, and returns the same scan graph the desktop would draw. A pairing code gates catalog and scan; requested paths must sit under a folder the host has shared. HTTP on the tailnet is still encrypted by Tailscale; on local Wi-Fi the token is the access control. iPad connects with **Computer** — hostname.local, a LAN IP, or a Tailscale name / `100.x` address.
-- **Native scanning:** Rust owns filesystem traversal so directory access remains outside the webview and behaves consistently across desktop platforms.
-- **Native GitHub hierarchy:** the web source uses GitHub's repository and recursive Trees APIs rather than cloning repositories or proxying source through another server. If the default branch commits `.codebase-index/_story.json`, one additional Contents API request reads it and validates it against the mapped tree.
-- **Source-control-aware traversal:** the `ignore` crate applies `.gitignore`, `.ignore`, global Git excludes, and common generated-directory exclusions. A hand-written ignore parser would be less correct.
-- **Language-agnostic graph:** nodes and containment edges model structure consistently across mixed-language repositories.
-- **Parsed import edges:** local scans parse each TypeScript, JavaScript, and Rust file with tree-sitter and read its import sites — `import`/`require`/dynamic `import()` forms, module-relative `new URL(path, import.meta.url)` dependencies, and `use` declarations — then resolve each specifier against the scanned tree: relative paths, workspace `package.json` names, and workspace crate names. Specifiers that do not resolve to a scanned file or directory (external packages, standard libraries) are dropped rather than guessed at, so every drawn edge points at real code. A real parse is what makes grouped and multi-line forms (`use crate::{a::B, c}`) resolve as precisely as the single-path form they abbreviate, and what lets `use super::*` inside a `mod tests` block name the file around it instead of inventing an edge to the crate root. This is deliberately still not a compiler: tsconfig path aliases, re-export chains, and dynamic module schemes are out of scope.
-- **Edges carry what crosses them:** an import edge records the named bindings the importer takes — `App.tsx` does not merely import `model.ts`, it takes `RepositoryGraph`, `layerForNode`, and `formatBytes` from it. Bindings are read from the same parse, so they cost nothing beyond it and never drift from the code the way a written annotation would. Aliased bindings record the source name, since that is the symbol the target actually exports; namespace and glob imports record `*`; side-effect and dynamic imports record nothing, because nothing statically crosses.
-- **Symbol index:** every parsed file carries the declarations it makes — functions, types, and constants, each with its line and whether it is exported. Language-specific declaration forms normalize to those three kinds, because finer distinctions do not survive a map legend, and a Rust `impl` block contributes its methods as `Type::method` so a type's real surface is visible. The index makes search find code rather than filenames, and gives the inspector a module's contents at the grain a reader actually asks about.
-- **Aggregated flow rendering:** file-level import edges beyond the render cap lift to their nearest rendered ancestor and merge into weighted module-to-module arcs, so a large monorepo shows package-level flow instead of an unreadable hairball. Arcs shade from amber at the importer to rust at the imported module to show direction. At rest the map is a transit diagram: only the twelve heaviest routes stay on as arteries. Hovering or selecting a district reveals the streets that cross its boundary, keeps inner wiring at the mid base layer, and drops unrelated arteries to faint city context.
-- **Flow view:** a second projection of the same graph where imports drive the layout instead of the directory tree. Modules become chips layered left to right by import direction — entry points that nothing imports on the left, shared foundations on the right — via longest-path layering over the condensation of strongly connected components, so import cycles share a column and render as dashed return edges rather than breaking the diagram. Selecting a chip traces its transitive upstream and downstream; barycenter ordering keeps edges short. The diagram is flat information, so it renders as plain SVG with CSS-animated pulses instead of another Three.js scene, and caps at 220 chips ranked by flow weight.
-- **Flow stays detailed:** when the depth slider's level yields fewer than 12 flow modules, the flow view deepens on its own until the diagram says something, and labels the deeper level as "auto detail". The slider is a floor, not a ceiling. Hover tracing exists only on pointer devices; on touch (iPad), tapping a chip drives the same trace through selection.
-- **Direct Three.js integration:** the scene uses Three.js without another rendering framework. React owns application state; Three.js owns the imperative scene lifecycle.
-- **Deterministic layout:** sorted scan output and a stable layout produce the same map for the same repository state.
-- **Position encodes containment:** the map is a nested squarified treemap — each directory is a district whose footprint contains its children, with area proportional to subtree code volume and alternating tones by nesting level. Hierarchy needs no drawn lines, so the only edges in the scene are import arcs. District name tags keep the field orientable: platforms whose children are rendered carry a floating paper region tag, unpacked leaf districts carry a tag on their slab, and tiny footprints stay untagged so labels never outnumber shapes. Tags look through wrapper directories (`src`, `lib`) and skip support directories (`test`, `fixtures`) the way flow chips do, so the field names real places instead of the same SRC/TEST pair on every plate. A tag is a handle on the place it names: hover or click one to select that district, even where it floats clear of its own footprint. Only the tag's ink takes the pointer, so the transparent margin around it never blocks the map behind.
-- **Area is weighted code volume, not raw size:** source and documentation lines count in full, config and serialized data lines are quartered, and binary assets contribute only a small bounded presence weight — a folder of images or JSON exports cannot dominate the map. The inspector still reports exact raw bytes and lines.
-- **A connection is inspectable in every view:** a story arc pins open to show what it carries, what comes back, and the files at each end; a map arc and a flow route both open the same panel listing the bindings that cross them, because a route means the same thing wherever it is drawn. Aggregation carries the union of crossing bindings up from the file-level edges it merges, bounded, because a route whose only label is its weight says two modules touch without saying why.
-- **`.codebase-index/` is a shared convention, not one tool's directory:** the markdown mirror and `_story.json` sit there together with separate lifecycles. `.last-commit` tracks the mirror, which is regenerated per commit; it says nothing about the story, which is written once and validated against the scan directly. The staleness warning names the summaries it covers and stays quiet when no summary was attached, so a story is never tarred by a mirror that has drifted.
-- **Codebase-index summaries:** when a repository carries a `.codebase-index/` markdown mirror, local scans attach each entry's leading summary to its node — the inspector shows what a module *is*, and search matches summary text, making queries semantic. The mirror itself stays out of the map, and a warning notes when the index is behind `HEAD`.
-- **Facts and prose are separate layers:** the scanner produces facts — structure, metrics, import edges, crossing bindings, declarations — which are deterministic, cost a parse, and are exactly as current as the last scan. `.codebase-index/` produces prose, which describes intent no parse can recover but is written by a model and drifts from `HEAD`. Keeping them apart is why an arc's annotation can be trusted while a summary carries a staleness warning: nothing derivable is written down, and nothing written down is presented as derived.
-
-```mermaid
-flowchart LR
-  F[Files on disk] --> P[tree-sitter parse]
-  P --> S[Declarations<br/>name · kind · line · exported]
-  P --> I[Import sites<br/>specifier + bindings]
-  I --> R[Resolution against<br/>the scanned tree]
-  R --> E[Annotated import edges]
-  M[".codebase-index/ mirror"] --> D[Module summaries]
-  M --> N["_story.json"]
-  N --> Y[Actors · flows · journeys]
-  S --> G[RepositoryGraph]
-  E --> G
-  D --> G
-  Y --> G
-  G --> Q[Search · inspector · map · flow]
-  G --> Z[Story view]
-```
-- **Story authoring ships with the CLI:** `atlas story brief` embeds `docs/writing-a-story.md` and bounded scan facts for the user’s own coding agent; `atlas story check` reuses scan validation and reports product-source coverage. Atlas never calls a model or writes the story. README links to the rules instead of duplicating them.
-- **Story view:** the landing view, and the only one written for a reader who has never opened a codebase. It draws a hand-authored `.codebase-index/_story.json`: actors with a plain-English blurb, the flows between them, and named journeys data takes end to end. It exists because the map and the flow view are both projections of the same two facts — containment and imports — and neither can express what a reader actually asks. The decisive gap is that the most important nodes in a data-flow story are not in the repository at all: the person typing, the chat service, the model being called. No parse can invent them, so the narrative is authored rather than derived, and a repository without the file gets an empty state explaining how to write one instead of a diagram derived from structure — which would only be the flow view with fewer chips.
-- **Role is the layout:** a story file carries no coordinates. An actor's `role` — `person`, `surface`, `door`, `core`, `store`, `external` — is also its column, in that reading order, so naming an actor honestly places it. Empty roles collapse rather than leaving a gap. Return paths and same-stage links draw as dashed arcs, which is why a round trip needs no second row of boxes.
-- **One arrow, both directions:** a flow records what it `carries` and, when anything comes back, what it `returns`. A journey step taken against a flow reads as its return text. Drawing one line per pair instead of two keeps a round-trip journey from doubling every arc on the diagram.
-- **Sentences live in the caption, not on the arc:** a column gap is narrower than a sentence, so on-arc labels either truncate to nothing or paint over the next card. Hovering an arc or playing a journey puts the full text in one roomy caption bar at full size instead.
-- **A journey brings the reader along:** the diagram is wider than the panel on any real repository, so playing a journey scrolls the current hop into view, lights it, keeps what it has already visited legible, and dims the rest. Width stops mattering when the view follows the data for you.
-- **The story is validated against the scan:** actor ids, flow endpoints, journey steps, and module paths are all checked against the tree that was just scanned. What no longer resolves is dropped and reported as a scan warning, so a story that has drifted from the code still renders the part that is true — the expected failure of a hand-written file that outlives a rename.
-- **Honest metrics:** local scans count lines from bounded text files. GitHub Trees provide file sizes but not contents, so GitHub maps encode size and mark line counts and import edges unavailable. The web reads a committed story at no model cost; it does not fetch per-file summaries or source contents. A failed story fetch warns without failing the map.
-- **Bounded work:** scans stop at 4,000 nodes, the scene renders at most 700 nodes, local line counting skips files larger than 2 MiB, and the symbol index stops at 128 declarations per file and 60,000 overall so a generated surface cannot bloat a map that also travels to a paired device. Full scan statistics and the searchable index remain available when rendering is capped.
-- **Event-driven rendering:** the scene redraws for camera or state changes instead of running a permanent animation loop.
-- **Hairline presentation:** `ui/tokens.css` defines light/dark monochrome surfaces for the shell and every renderer, including the legacy map through `ui/theme.ts`. Fonts are bundled for offline use. Optional story figures use Hairline’s React components and role defaults; [the authoring rules](docs/writing-a-story.md#part-figures) define their names. Source actions live in the Source menu; the 3D map and import flow remain under More views.
-- **In-repo design system:** the monochrome Hairline look lives in `src/ui/` as three layers — `tokens.css` (every color, surface, and type size as CSS custom properties, including the kind palette and the 3D map palette), `ui.css` plus small React primitives (`SectionHeading`, `Seg`, `Stat`, `Register`, `KindMark`) for markup patterns used across features, and `theme.ts`, which reads the tokens off the document so the Three.js scene and canvas labels follow the same palette. Restyling means editing tokens, not chasing literals; an external component library was rejected because the aesthetic is bespoke and the primitive count is small.
+- **One graph across adapters:** scripts, agents, paired devices and desktop use the same Rust implementation. The desktop Share dialog or `atlas serve` exposes it on port 7420 over LAN or Tailscale. A pairing code gates catalog and scans; paths must lie under shared roots. Mobile borrows the computer’s scan rather than cloning code.
+- **Source-control-aware traversal:** the `ignore` crate handles `.gitignore`, `.ignore`, global excludes and common generated trees. Scan output is sorted and bounded at 4,000 nodes; line counting skips files over 2 MiB. Declaration indexing stops at 128 names per file and 60,000 overall.
+- **Parsed facts:** tree-sitter reads TypeScript, JavaScript and Rust declarations and imports. Relative paths, workspace package/crate names, `new URL(path, import.meta.url)` and Rust `use` resolve against the scanned tree. Unresolved external packages are dropped. This is not a compiler: path aliases, re-export chains and dynamic module schemes remain out of scope.
+- **Crossing names:** edges record the bindings taken from each imported module. Aliases retain their source name, namespace/glob imports record `*`, and side-effect/dynamic imports carry no named bindings. The UI groups real edges at part boundaries; dependency direction is distinct from written data-flow direction.
+- **Written story, scanned facts:** people, external systems and narrative exchanges cannot be inferred from imports. A hand-written `.codebase-index/_story.json` supplies actors, flows and journeys. Both validators drop invalid references and report warnings. The UI labels written, scanned and import-derived information separately.
+- **Transit layout:** roles form columns in person → surface → door → core → store → external order. Empty columns collapse. A flow carries a sentence and may return another; a reverse journey hop uses its return text. A faint base network, ink visited routes, dashed upcoming routes and a moving packet make progress visible. Reduced motion stops packet and dash animation and makes following scroll immediate.
+- **Flat territory:** a squarified treemap groups files by top-level area. Source/docs weight is full lines, config/data quarter weight, and binary assets contribute bounded presence. GitHub uses bytes as an estimate. Selected product files fill ink, other parts remain neutral, uncovered files hatch, tests/setup mute. Small tiles remain available through full-size file-list controls.
+- **Honest coverage:** percentages use product-source lines, mirroring `source_scope.rs` in `sourceScope.ts`: tests/support, config, hidden tooling, vendored and generated trees are excluded. The most specific module owns a file; story order breaks ties. Every file counts once. GitHub shows file counts because lines/imports are unavailable; truncated scans are marked partial. [The scope contract](docs/writing-a-story.md#product-source-scope-and-checks) records the precise exclusions.
+- **Conservative gap hints:** walk uncovered product importers upstream, ignoring tests. Suggest files only when all reached owning boundaries belong to one part and no unowned entry root exists. Cycles terminate; shared utilities and orphan cycles remain unassigned. Hints are facts to review, not automatic story edits.
+- **Declaration order:** Inside a part lists files by path and declarations exported first, then by line. It explicitly does not claim execution/call order. Tests are files that import the part; inline Rust tests do not become invented test files.
+- **Hairline presentation:** shared light/dark tokens live in `ui/tokens.css`; React Hairline figures use those surfaces. People remain text, while other roles have documented figure defaults. Theme storage is guarded and system changes apply until a preference is saved. Responsive layouts collapse the sidebar into top controls, reflow cards, and scroll the transit card internally on narrow screens.
+- **Repository access is read-only:** local scans read metadata and bounded text. GitHub fetches no source files or per-file summaries; a story read is capped at 256 KiB. Maps can travel as JSON snapshots and never execute the code they describe.
 
 ```mermaid
 flowchart TD
-  T[ui/tokens.css<br/>palette · type · surfaces] --> U[ui/ui.css + primitives<br/>SectionHeading · Seg · Stat · Register · KindMark]
-  T --> B[ui/theme.ts<br/>CSS-variable bridge]
-  U --> A[App.tsx · App.css<br/>shell and features]
-  B --> S[RepositoryScene<br/>Three.js map]
-  T --> F[FlowScene SVG<br/>styled via classes]
+  Tokens[ui/tokens.css] --> Shell[Atlas.css + App.css]
+  Tokens --> Figures[Hairline React figures]
+  Graph[RepositoryGraph] --> Facts[storyFacts + sourceScope]
+  Facts --> Transit[transitLayout + journey]
+  Facts --> Coverage[territory + treemap]
+  Facts --> Declarations[partDeclarations]
+  Transit --> Journey[JourneyView]
+  Coverage --> Territory[TerritoryView]
+  Declarations --> Part[PartView]
+  Figures --> Journey
+  Figures --> Part
 ```
 
 ## CLI and HTTP API
@@ -153,36 +102,14 @@ let json = codebase_atlas_lib::scan_json(std::path::Path::new("."), false)?;
 
 ## Interaction
 
-- Select **Scan directory** on the desktop to choose a repository.
-- Select **Share** on the desktop to accept connections from this Wi-Fi or Tailscale network. The dialog shows a QR code, pairing code, and reachable addresses. Folders you scan are shared automatically; **Share folder** adds another root (a parent like `~/dev` lists the projects inside it).
-- Select **Computer** on iPhone or iPad (or in the browser). The fastest path is to scan the QR code from the computer’s Share dialog — iOS Camera, or **Scan pairing code** inside the app. The catalog is the computer’s shared folders; choosing one runs the scan on the computer and draws the full-fidelity map here.
-- Headless equivalent: `cargo run --manifest-path src-tauri/Cargo.toml --bin atlas -- serve /path/to/repo`.
-- Select **GitHub URL** and enter a public repository URL in either the web or desktop app.
-- Select **Save map** to export the current graph as a `.atlas.json` file, and **Open map** anywhere to load one. A map exported from a desktop scan carries everything the scan saw — annotated import edges, declarations, line counts, and codebase-index summaries — so a snapshot can still travel by AirDrop when the computer is offline.
-- A map placed at `public/maps/default.atlas.json` is bundled into the build and loads automatically when no other source is saved — generate one headlessly with `cargo run --manifest-path src-tauri/Cargo.toml --bin atlas -- scan --output public/maps/default.atlas.json <repository>`. Bundled maps are snapshots (rebuild to refresh) and stay out of git.
-- Drag to orbit, secondary-drag to pan, and scroll to zoom.
-- Hover a module on the map to read its name and, when a `.codebase-index` summary exists, what it is — without leaving the field. Clicking an import arc opens what crosses it — the same route panel the flow view uses. Selecting a module centers it and lights its connections at the current survey grain without changing the current zoom or opening it; clicking the selection again decomposes it into its children. Selecting anything outside the opened district closes it, as do `Esc` and the ✕ close button in the toolbar — one district decomposed at a time. Map and flow share the selection, so flow traces the nearest chip and returning to the map keeps that place selected and centered. The inspector lists what the module contains, what it declares, what it imports, and what imports it — each import partner named alongside the bindings that actually cross to it. Press `0` or Reset to return to the survey view.
-- Open a district on the map to show its children inside its footprint without moving the survey slider or changing the current zoom. Large districts also unpack on their own: a roomy tile shows its nested modules as a treemap under its name tag. The rest of the map stays at the survey grain. The header trail is the path you opened; the scale ladder names the grain (field, district, folder, file). Function is the next rung and is not in this survey yet. Click a trail crumb or an earlier scale rung to step back out.
-
-```mermaid
-flowchart LR
-  Survey[Survey slider] --> Field[Whole-map grain]
-  Focus[Click a district] --> Peek[Local children]
-  Focus --> Center[Camera centers it]
-  Trail[Location trail] --> Path[Where you are]
-  Scale[Scale ladder] --> Grain[Field to file]
-  Peek --> Trail
-  Peek --> Scale
-```
-- Toggle structure, source, config, documentation, tests, and import layers independently. The tests layer — files matching `*.test.*`/`*.spec.*`/`*_test.*` and everything under support directories like `test/` and `fixtures/` — starts hidden so the map leads with the product code; its toggle brings it back.
-- **How it works** opens first. Pick a written journey in the sidebar, then use Prev/Play/Next or a step tick to follow its data. The base transit network stays faint, visited routes turn ink, upcoming routes are dashed, and a packet follows the current connection. Select a station or part card to read its written exchanges and scanned files/import crossings. People stay text; code and outside systems have Hairline figures. The transit card scrolls horizontally on narrow screens and follows the current hop, respecting reduced motion. A connection can also be selected directly to read its carries/returns text.
-- **More views** keeps the 3D map and import flow reachable. Their existing selection, depth controls, module search, route inspection, and camera shortcuts still operate. Without a story, the landing screen explains `atlas story brief` and `atlas story check`; map and flow remain available. The Source menu retains Scan directory, Share/Computer, GitHub URL, and Open/Save map.
-
-- Drag the survey slider to set how many directory levels both views render by default (default 2; the top stop shows all). Import edges aggregate to the visible level, so a coarse survey shows package-to-package flow. Opening a district does not move the slider.
-- Drag the module or inspector dividers to resize the side panels. Double-click a divider to restore its default width. The chosen widths persist for the next launch.
-- Search (`/`) matches a module's name, path, language, `.codebase-index` summary, and the names it declares, so typing a function name finds the file that defines it and the files that take it.
-- Press `G` to load GitHub, `C` to share (desktop) or connect to a computer (iPad / browser), `/` to search, `0` to reset the camera, and `+` or `-` to zoom.
-- The last successful local or GitHub source is rescanned at the next launch.
+- The **Source** menu retains **Scan directory** and **Share** on desktop, **Computer** for companion connections, **GitHub URL**, and **Open/Save map**. Share exposes pairing QR/code and reachable addresses. **Share folder** adds a root; scanned folders are shared automatically. Computer accepts a host/code or pairing QR. iOS Camera can open a paired deep link.
+- **How it works** opens first. Pick a written journey, use Prev/Play/Next or its ticks, and follow the carries/returns headline. Select a station, connection or part card to inspect its exchanges, files and crossings. **Look inside** opens the selected part.
+- **Where it lives** highlights the selected part in a file treemap. Sidebar percentages count product source. Choose another part, trace a written journey across each part’s largest file, select a tile, or browse every file. People and outside systems without files are named outside the trace.
+- **Inside a part** shows written Arrives/Leaves beside scanned files, declarations, crossings and importing tests. Choose a part from the selector or its exchange/crossing links. Expand file rows to see their names and line numbers. File links take the selection to Where it lives.
+- A missing story explains `atlas story brief` and `atlas story check`; Where it lives still shows the files. GitHub maps explicitly explain the lack of imports, declarations and line counts. Warnings remain visible.
+- Search matches names, paths, languages, codebase-index summaries and declarations. Press `/` to focus search, `G` to open GitHub, `C` to Share (desktop) or Computer (mobile/browser), and `Esc` to close source/pairing dialogs. Keyboard users can select transit routes and file tiles; tiny tiles have the accessible file list.
+- Theme follows the system by default; Light/Dark remembers a preference on this device. The last successful local, GitHub or companion source reloads next launch.
+- Save exports `.atlas.json` with scan facts and story. Open works anywhere. Put a snapshot at `public/maps/default.atlas.json` to bundle it for offline use; generate it with `cargo run --manifest-path src-tauri/Cargo.toml --bin atlas -- scan --output public/maps/default.atlas.json .`. Snapshots stay out of git and need regeneration to refresh.
 
 ## Writing a story
 
@@ -193,6 +120,8 @@ atlas story brief . > /tmp/atlas-story-brief.md
 # Give the brief to your coding agent; it writes .codebase-index/_story.json.
 atlas story check .
 ```
+
+Actors may set an optional `figure` to a [Hairline figure name](docs/writing-a-story.md#part-figures). Unknown names warn and fall back. People use text; defaults are terminal (surface), padlock (door), riffle (core), cabinet (store), and branches (external).
 
 The brief includes a compact scan digest, the existing story, and scan/validation warnings. The digest chooses the deepest uniform directory level that fits at most 150 modules, partitions only product code into rows without ancestor repeats, collapses single-child chains, summarizes docs/config on one line, lists up to six exported declarations per module, and aggregates at most 150 import routes with up to eight crossing names each. Display labels are bounded; omitted entries are counted. It supplies facts for an agent to investigate, not prose inferred from imports.
 
@@ -229,30 +158,30 @@ pnpm blocks every script, `pnpm test` included, not just the install.
 
 ```text
 src/
-  AtlasWorkspace.tsx      narrative workspace, journeys, and code search
-  JourneyView.tsx         transit map, stepper, figures, selected part details
-  PartDetails.tsx         written exchanges and scanned files/crossings
-  storyFacts.ts           ownership, exchanges, import crossings, tests
-  transitLayout.ts        role columns, station positions, transit routes
-  Atlas.css               responsive Hairline shell
+  App.tsx                 source lifecycle, dialogs, theme and screen navigation
+  AtlasWorkspace.tsx      sidebar, search and shared part/journey state
+  JourneyView.tsx         transit map, playback, figures and exchanges
+  TerritoryView.tsx       flat file map, journey trace and gap hints
+  PartView.tsx            declarations, files, crossings and importing tests
+  PartDetails.tsx         shared scanned file/crossing and written exchange lists
+  storyFacts.ts           exclusive ownership, exchanges, crossings and tests
+  sourceScope.ts          TS mirror of Rust product-source scope
+  territory.ts            coverage, conservative gap derivation and map layout
+  treemap.ts              weighted-volume and squarified packing utilities
+  transitLayout.ts        role columns, stations and route paths
+  journey.ts              journey hops, flow keys and label wrapping
+  partDeclarations.ts     exported-first declaration ordering
   storyFigures.ts         figure catalogue and role defaults
-  App.tsx                 application state and accessible shell
-  ui/                     design system: tokens.css, ui.css, theme.ts, primitives
-  PanelResizeHandle.tsx   draggable panel dividers
-  panelLayout.ts          side-panel width clamping and persistence
-  RepositoryScene.tsx     Three.js lifecycle and interaction
-  RoutePanel.tsx          what crosses one import route, shared by map and flow
-  repositoryLayout.ts     deterministic module placement
-  placeNames.ts           wrapper/support toponyms shared by map and flow
-  flowLayout.ts           import-direction chip layout
-  StoryScene.tsx          narrative diagram, hover, and journey playback
-  storyLayout.ts          role-as-column placement and journey hops
-  storyValidation.ts      web story parsing and validation against the map
-  companion.ts            LAN / Tailscale companion client
+  storyValidation.ts      web story validation against the mapped tree
+  Atlas.css               responsive Hairline screen layouts
+  App.css                 base styles, source/pairing dialogs and footer
+  ui/                     tokens, PartFigure, theme and reduced-motion hooks
+  companion.ts            LAN / Tailscale client
+  PairingScanner.tsx      browser QR capture
+  pairingQr.ts            pairing QR generation
   github-url.ts           GitHub URL validation
-  github.ts               GitHub API and tree-to-graph adapter
-  model.ts                frontend graph contract and formatting
-docs/writing-a-story.md    authoring rules embedded in the CLI
+  github.ts               API and tree-to-graph adapter
+  model.ts                graph contract, source classification and formatting
 src-tauri/src/
   lib.rs                  public scan API and feature boundary
   app.rs                  thin Tauri command and lifecycle adapter
@@ -268,9 +197,3 @@ src-tauri/src/
   bin/scan.rs             compatibility alias for atlas scan
   bin/serve.rs            compatibility alias for atlas serve
 ```
-
-Repository access is read-only. Local scans read metadata and bounded text files to count lines. GitHub scans make two unauthenticated requests to `api.github.com`, plus one Contents API request when the tree includes a story within the 256 KiB limit, and support public repositories only. `.codebase-index/` stays out of the map.
-
-The **Where it lives** screen uses a flat, weighted treemap grouped by top-level area. Product-source percentages mirror `src-tauri/src/source_scope.rs` through `src/sourceScope.ts`: hidden, vendored, generated, test and setup files do not enter the denominator. Ownership uses the most specific story module, then story order for ties, so overlaps count once. GitHub maps show file counts rather than invented line percentages. Import-derived gap hints walk upstream through uncovered product files, ignore tests, and require one owning part with no unowned entry root. Small tiles remain reachable through the full-size file list.
-
-**Inside a part** connects the written arrives/leaves flows to scanned file declarations, import crossings and importing tests. Files sort by path, each file shows exported names first then line order. This is declaration order, not execution order: Atlas does not trace calls. The same conservative gap hints appear for the selected part; no story edits or inferred prose are fabricated.

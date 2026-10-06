@@ -35,7 +35,7 @@ export default function TerritoryView({ graph, actor, journeyIndex, onSelectActo
         <defs><pattern id={pattern} width="6" height="6" patternUnits="userSpaceOnUse"><rect width="6" height="6" fill="var(--card)" /><path d="M-1 1 L1 -1 M0 6 L6 0 M5 7 L7 5" stroke="var(--line)" /></pattern></defs>
         {layout.areas.map(area => <g key={area.name}><rect {...area} fill="var(--pill)" /><text x={area.x + 6} y={area.y + Math.min(18, area.height / 5)} className="territory-area">{area.width > 75 ? area.name : ""}</text></g>)}
         {layout.cells.map(cell => {
-          const target = cell.width >= 44 && cell.height >= 44;
+          const target = cell.width >= 46 && cell.height >= 46;
           const active = cell.owner === actor?.id;
           const fill = !cell.product ? "var(--pill)" : active ? "var(--ink)" : cell.owner ? "var(--line)" : `url(#${pattern})`;
           return <g key={cell.node.id} role={target ? "button" : undefined} tabIndex={target ? 0 : undefined} aria-label={target ? cell.node.path : undefined} onClick={target ? () => onOpenFile(cell.node.id) : undefined} onKeyDown={target ? event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpenFile(cell.node.id); } } : undefined} className={target ? "territory-target" : undefined}>

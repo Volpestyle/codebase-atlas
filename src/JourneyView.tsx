@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ROLE_HEADINGS, type RepositoryGraph, type StoryActor, type StoryFlow } from "./model";
-import { journeyHops, flowKey, wrapText } from "./storyLayout";
+import { journeyHops, flowKey, wrapText } from "./journey";
 import { buildTransitLayout, transitPath } from "./transitLayout";
 import { useReducedMotion } from "./ui/useReducedMotion";
 import PartFigure from "./ui/PartFigure";

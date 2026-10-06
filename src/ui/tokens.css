@@ -1,5 +1,4 @@
-/* Hairline palette. Legacy SVG/canvas/Three.js renderers consume these same
-   monochrome tokens through ui/theme.ts. Fonts are bundled for offline use. */
+/* Shared Hairline surfaces; fonts and figures work offline. */
 :root {
   --bg: #ffffff; --ink: #0a0a0a; --body: #404040; --muted: #737373;
   --faint: #a3a3a3; --line: #e5e5e5; --pill: #f4f4f4; --card: #ffffff;
@@ -7,20 +6,7 @@
   --font-sans: "Geist", system-ui, sans-serif;
   --font-mono: "Geist Mono", ui-monospace, monospace;
   --font-serif: "Instrument Serif", Georgia, serif;
-  --paper: var(--bg); --paper-light: var(--card); --paper-dark: var(--pill);
-  --olive: var(--muted); --rust: var(--ink); --hairline: var(--line);
-  --ink-wash: var(--pill); --rust-wash: var(--pill); --rust-line: var(--line);
-  --plate: var(--bg);
-  --fs-nano: 10px; --fs-label: 11px; --fs-small: 12px; --fs-base: 12px;
-  --fs-title: 14px; --fs-heading: 16px; --fs-prose: 14px; --ls-label: .04em;
-  --kind-repository: #a3a3a3; --kind-directory: #a3a3a3; --kind-source: #d4d4d4;
-  --kind-config: #a3a3a3; --kind-documentation: #e5e5e5; --kind-asset: #737373;
-  --kind-function: #d4d4d4; --kind-type: #e5e5e5; --kind-constant: #a3a3a3;
-  --map-repository: #b3b3b3; --map-directory: #c7c7c7; --map-directory-alt: #b8b8b8;
-  --map-source: #dddddd; --map-config: #aaaaaa; --map-documentation: #e5e5e5;
-  --map-asset: #bbbbbb; --map-outline: #404040; --map-glow: #ffffff;
-  --map-hover: #737373; --map-search-hit: #404040; --map-import-source: #737373;
-  --map-import-target: #0a0a0a; --map-grid-major: #a3a3a3; --map-grid-minor: #e5e5e5;
+  --font-small:12px; --font-base:14px; --font-heading:18px; --font-prose:14px;
   --hairline-plate: var(--card); --hairline-hi: var(--ink); --hairline-edge: var(--muted);
   --hairline-mid: var(--faint); --hairline-lo: var(--line); --hairline-stroke: .9;
 }
@@ -28,12 +14,4 @@
   --bg: #08090a; --ink: #fafafa; --body: #d4d4d8; --muted: #a1a1aa;
   --faint: #52525b; --line: #27272a; --pill: #18181b; --card: #08090a;
   --card-shadow: inset 0 0 0 1px #1c1c20, 0 10px 28px -16px rgb(0 0 0 / .7);
-  --kind-repository: #52525b; --kind-directory: #52525b; --kind-source: #3f3f46;
-  --kind-config: #52525b; --kind-documentation: #27272a; --kind-asset: #71717a;
-  --kind-function: #3f3f46; --kind-type: #27272a; --kind-constant: #52525b;
-  --map-repository: #27272a; --map-directory: #3f3f46; --map-directory-alt: #343439;
-  --map-source: #52525b; --map-config: #3f3f46; --map-documentation: #27272a;
-  --map-asset: #52525b; --map-outline: #a1a1aa; --map-glow: #fafafa;
-  --map-hover: #71717a; --map-search-hit: #d4d4d8; --map-import-source: #a1a1aa;
-  --map-import-target: #fafafa; --map-grid-major: #3f3f46; --map-grid-minor: #18181b;
 }

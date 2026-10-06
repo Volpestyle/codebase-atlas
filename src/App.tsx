@@ -1,15 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { PanelResizeHandle, usePanelLayout } from "./PanelResizeHandle";
-import KindMark from "./ui/KindMark";
-import Register from "./ui/Register";
-import SectionHeading from "./ui/SectionHeading";
-import Seg from "./ui/Seg";
-import Stat from "./ui/Stat";
-import RepositoryScene, { type RepositorySceneHandle } from "./RepositoryScene";
-import FlowScene from "./FlowScene";
-import StoryScene from "./StoryScene";
 import AtlasWorkspace from "./AtlasWorkspace";
 import { useTheme } from "./ui/useTheme";
 import "./Atlas.css";
@@ -27,35 +18,7 @@ import {
 } from "./companion";
 import PairingScanner from "./PairingScanner";
 import { pairingQrSvg } from "./pairingQr";
-import {
-  DEFAULT_INSPECTOR_WIDTH,
-  DEFAULT_RAIL_WIDTH,
-  MIN_INSPECTOR_WIDTH,
-  MIN_RAIL_WIDTH,
-} from "./panelLayout";
-import {
-  crossingLabel,
-  formatBytes,
-  layerForNode,
-  matchesSymbol,
-  parseRepositoryGraph,
-  type LayerName,
-  type LayerVisibility,
-  type RepositoryGraph,
-  type RepositoryNode,
-  type RepositoryNodeKind,
-} from "./model";
-import {
-  SCALE_LADDER,
-  ancestorAtScale,
-  ancestry,
-  nodeGlyph,
-  scaleIndex,
-  scaleOf,
-  surveyOffset,
-  visibleCrumbs,
-  type NodeScale,
-} from "./location";
+import { matchesSymbol, parseRepositoryGraph, type RepositoryGraph } from "./model";
 import "./App.css";
 
 const LAST_SOURCE_KEY = "codebase-atlas:last-source";
@@ -66,22 +29,7 @@ const isTauriRuntime = "__TAURI_INTERNALS__" in window;
 // LAN / Tailscale.
 const isDesktopRuntime = isTauriRuntime && navigator.maxTouchPoints < 2;
 
-// Granularity slider range; the top stop renders every depth.
-// Story first: it is the only view that opens with sentences instead of 987
-// modules, so it is what a reader meets before the reference views.
-const VIEW_MODES = ["story", "territory", "part", "map", "flow"] as const;
-type ViewMode = (typeof VIEW_MODES)[number];
-
-const VIEW_INDEX: Record<ViewMode, string> = {
-  story: "B.02 / How it works",
-  territory: "Where it lives",
-  part: "Inside a part",
-  map: "B.02 / Orthographic",
-  flow: "B.02 / Import flow",
-};
-
-const MAX_MAP_DEPTH = 8;
-const DEFAULT_MAP_DEPTH = 2;
+type ViewMode = "story" | "territory" | "part";
 
 type SavedSource =
   | { kind: "local"; value: string }
@@ -90,192 +38,8 @@ type SavedSource =
 
 type SavedCompanion = { host: string; token: string };
 
-const kindDescriptions: Record<RepositoryNodeKind, string> = {
-  repository: "The repository root and coordinate origin for this code map.",
-  directory: "A structural boundary that groups related modules and resources.",
-  source: "Executable or declarative source that contributes to the product behavior.",
-  config: "Configuration that controls tooling, builds, automation, or runtime behavior.",
-  documentation: "Human-readable context describing the system, its use, or its decisions.",
-  asset: "A non-code resource consumed by the application or its documentation.",
-};
-
-const defaultLayers: LayerVisibility = {
-  structure: true,
-  source: true,
-  config: true,
-  docs: true,
-  // Test files and directories are scaffolding around the story the map
-  // tells; the layer exists but starts hidden.
-  tests: false,
-  imports: true,
-};
-
-// One import partner: how many edges reach it, and the named bindings that
-// cross them — what the selection actually takes from that module.
-interface PartnerFlow {
-  count: number;
-  symbols: Set<string>;
-}
-
-// Import partners of the selected node, including everything beneath it, so a
-// directory shows the aggregate flow of its subtree.
-function flowPartners(graph: RepositoryGraph, selected: RepositoryNode) {
-  const imports = new Map<string, PartnerFlow>();
-  const importers = new Map<string, PartnerFlow>();
-  if (selected.id === ".") return { imports, importers };
-  const prefix = `${selected.id}/`;
-  const inScope = (id: string) => id === selected.id || id.startsWith(prefix);
-  const record = (partners: Map<string, PartnerFlow>, id: string, symbols?: string[]) => {
-    let flow = partners.get(id);
-    if (!flow) {
-      flow = { count: 0, symbols: new Set() };
-      partners.set(id, flow);
-    }
-    flow.count += 1;
-    for (const symbol of symbols ?? []) flow.symbols.add(symbol);
-  };
-  for (const edge of graph.edges) {
-    if (edge.kind !== "imports") continue;
-    const fromSelection = inScope(edge.source);
-    const intoSelection = inScope(edge.target);
-    if (fromSelection && !intoSelection) {
-      record(imports, edge.target, edge.symbols);
-    } else if (intoSelection && !fromSelection) {
-      record(importers, edge.source, edge.symbols);
-    }
-  }
-  return { imports, importers };
-}
-
-function topFlows(flows: Map<string, PartnerFlow>) {
-  return [...flows]
-    .sort(
-      (left, right) => right[1].count - left[1].count || left[0].localeCompare(right[0]),
-    )
-    .slice(0, 6);
-}
-
-function childNodes(graph: RepositoryGraph, parentId: string) {
-  const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
-  return graph.edges
-    .filter((edge) => edge.kind === "contains" && edge.source === parentId)
-    .map((edge) => nodeById.get(edge.target))
-    .filter((node): node is RepositoryNode => Boolean(node))
-    .sort((left, right) => {
-      const leftRank = left.kind === "directory" || left.kind === "repository" ? 0 : 1;
-      const rightRank = right.kind === "directory" || right.kind === "repository" ? 0 : 1;
-      return leftRank - rightRank || left.name.localeCompare(right.name);
-    });
-}
-
-function LocationTrail({
-  trail,
-  onSelect,
-  compact = false,
-}: {
-  trail: RepositoryNode[];
-  onSelect: (id: string) => void;
-  compact?: boolean;
-}) {
-  if (trail.length === 0) return null;
-  const crumbs = compact ? visibleCrumbs(trail) : trail;
-  const currentId = trail[trail.length - 1]?.id;
-  const gapTarget = trail.length > 4 ? trail[trail.length - 3] : null;
-  return (
-    <nav className={`location-trail${compact ? " is-compact" : ""}`} aria-label="Focus path">
-      <ol>
-        {crumbs.map((crumb) => {
-          if (crumb === "gap") {
-            return (
-              <li key="gap">
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (gapTarget) onSelect(gapTarget.id);
-                  }}
-                  title={gapTarget?.path}
-                  aria-label="Show omitted ancestor"
-                >
-                  …
-                </button>
-              </li>
-            );
-          }
-          const current = crumb.id === currentId;
-          return (
-            <li key={crumb.id}>
-              {current ? (
-                <span aria-current="location">{crumb.name}</span>
-              ) : (
-                <button type="button" onClick={() => onSelect(crumb.id)} title={crumb.path}>
-                  {crumb.name}
-                </button>
-              )}
-            </li>
-          );
-        })}
-      </ol>
-    </nav>
-  );
-}
-
-function ScaleLadder({
-  current,
-  trail,
-  onSelect,
-}: {
-  current: NodeScale;
-  trail: RepositoryNode[];
-  onSelect: (id: string) => void;
-}) {
-  const currentIndex = scaleIndex(current);
-  return (
-    <Seg plate className="scale-ladder" role="group" aria-label="Focus scale">
-      {SCALE_LADDER.map((rung) => {
-        const index = scaleIndex(rung.id);
-        const locked = !rung.surveyed;
-        const reached = !locked && index <= currentIndex;
-        const isCurrent = rung.id === current;
-        const target =
-          locked || rung.id === "function" ? null : ancestorAtScale(trail, rung.id);
-        const disabled = locked || !target;
-        return (
-          <button
-            key={rung.id}
-            type="button"
-            className={[
-              reached ? "is-reached" : "",
-              isCurrent ? "is-current" : "",
-              locked ? "is-locked" : "",
-            ]
-              .filter(Boolean)
-              .join(" ")}
-            disabled={disabled}
-            aria-current={isCurrent ? "true" : undefined}
-            aria-label={
-              locked ? "Function scale is not in this survey" : `${rung.label} scale`
-            }
-            title={
-              locked
-                ? "Functions are not in this survey yet"
-                : target
-                  ? target.path
-                  : undefined
-            }
-            onClick={() => {
-              if (target && target.id !== currentId(trail)) onSelect(target.id);
-            }}
-          >
-            {rung.label}
-          </button>
-        );
-      })}
-    </Seg>
-  );
-}
-
-function currentId(trail: RepositoryNode[]) {
-  return trail[trail.length - 1]?.id;
+function SourceDialogHeading({ index, title, titleId, action }: { index: string; title: string; titleId: string; action: ReactNode }) {
+  return <header className="source-dialog-heading"><div><span className="source-dialog-index">{index}</span><h2 id={titleId}>{title}</h2></div>{action}</header>;
 }
 
 function errorMessage(error: unknown) {
@@ -346,16 +110,8 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  // The district deliberately broken open (second click on the selection);
-  // selection alone never changes what the map renders.
-  const [openedId, setOpenedId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [layers, setLayers] = useState<LayerVisibility>(defaultLayers);
-  const [depth, setDepth] = useState(DEFAULT_MAP_DEPTH);
   const [view, setView] = useState<ViewMode>("story");
-  const [inspectorTab, setInspectorTab] = useState<"overview" | "details">("overview");
-  const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [railOpen, setRailOpen] = useState(false);
   const [githubDialogOpen, setGitHubDialogOpen] = useState(false);
   const [githubUrl, setGitHubUrl] = useState("");
   const [computerDialogOpen, setComputerDialogOpen] = useState(false);
@@ -365,19 +121,6 @@ function App() {
   const [companionCatalog, setCompanionCatalog] = useState<CompanionCatalog | null>(null);
   const [shareStatus, setShareStatus] = useState<CompanionStatus | null>(null);
   const [scannerOpen, setScannerOpen] = useState(false);
-  const {
-    shellRef,
-    workspaceRef,
-    widths,
-    layoutMode,
-    railMax,
-    inspectorMax,
-    previewRail,
-    previewInspector,
-    commitRail,
-    commitInspector,
-    style: panelStyle,
-  } = usePanelLayout();
   const initialScanStarted = useRef(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const githubDialogRef = useRef<HTMLDialogElement>(null);
@@ -386,20 +129,11 @@ function App() {
   const mapFileInputRef = useRef<HTMLInputElement>(null);
   const githubInputRef = useRef<HTMLInputElement>(null);
   const companionHostRef = useRef<HTMLInputElement>(null);
-  const sceneRef = useRef<RepositorySceneHandle>(null);
 
   function showGraph(nextGraph: RepositoryGraph) {
     setGraph(nextGraph);
-    setSelectedId(
-      nextGraph.nodes.find((node) => node.kind === "repository")?.id ??
-        nextGraph.nodes[0]?.id ??
-        null,
-    );
-    setOpenedId(null);
+    setSelectedId(null);
     setSearchQuery("");
-    setInspectorTab("overview");
-    setInspectorOpen(false);
-    setRailOpen(false);
   }
 
   async function scanPath(path: string) {
@@ -667,29 +401,10 @@ function App() {
   useEffect(() => {
     function handleKeyboard(event: globalThis.KeyboardEvent) {
       if (event.key === "Escape") {
-        // Each press peels one layer: dialog, mobile rail, then the opened
-        // district backs out to its closed slab.
-        if (githubDialogOpen) {
-          setGitHubDialogOpen(false);
-          return;
-        }
-        if (computerDialogOpen) {
-          setComputerDialogOpen(false);
-          return;
-        }
-        if (shareDialogOpen) {
-          setShareDialogOpen(false);
-          return;
-        }
-        if (railOpen) {
-          setRailOpen(false);
-          return;
-        }
-        if (openedId) {
-          closeOpened();
-          return;
-        }
-        setInspectorOpen(false);
+        setGitHubDialogOpen(false);
+        setComputerDialogOpen(false);
+        setShareDialogOpen(false);
+        setScannerOpen(false);
         return;
       }
 
@@ -711,12 +426,6 @@ function App() {
       } else if (event.key === "/") {
         event.preventDefault();
         searchRef.current?.focus();
-      } else if (event.key === "0") {
-        sceneRef.current?.resetCamera();
-      } else if (event.key === "+" || event.key === "=") {
-        sceneRef.current?.zoomIn();
-      } else if (event.key === "-") {
-        sceneRef.current?.zoomOut();
       }
     }
 
@@ -801,33 +510,9 @@ function App() {
     void scanGitHub(githubUrl);
   }
 
-  function selectNode(id: string | null) {
-    // Progressive disclosure: the first click on a module selects it and
-    // lights its connections at the current survey grain; a
-    // second click on the same module breaks it open. Selecting anything
-    // outside the opened district (an ancestor, a sibling, empty ground)
-    // closes it again: one district decomposed at a time.
-    if (id !== null && id === selectedId) {
-      setOpenedId(id);
-    } else {
-      setSelectedId(id);
-      const inside =
-        id !== null && openedId !== null && (id === openedId || id.startsWith(`${openedId}/`));
-      if (!inside) setOpenedId(null);
-    }
-    setInspectorTab("overview");
-    setInspectorOpen(Boolean(id));
-  }
-
-  function closeOpened() {
-    // Backing out lifts the selection to the district that just closed, so
-    // the inspector lands on the whole rather than a hidden child.
-    setSelectedId(openedId);
-    setOpenedId(null);
-  }
-
-  function toggleLayer(layer: LayerName) {
-    setLayers((current) => ({ ...current, [layer]: !current[layer] }));
+  function selectNode(id: string) {
+    setSelectedId(id);
+    setView("territory");
   }
 
   const normalizedSearch = searchQuery.trim().toLowerCase();
@@ -841,57 +526,17 @@ function App() {
         node.description?.toLowerCase().includes(normalizedSearch) ||
         matchesSymbol(node, normalizedSearch),
     ) ?? [];
-  const moduleGroups: { key: LayerName; label: string; nodes: RepositoryNode[] }[] = [
-    {
-      key: "structure",
-      label: "Structure",
-      nodes: filteredNodes.filter((node) => layerForNode(node) === "structure"),
-    },
-    {
-      key: "source",
-      label: "Source + assets",
-      nodes: filteredNodes.filter((node) => layerForNode(node) === "source"),
-    },
-    {
-      key: "config",
-      label: "Configuration",
-      nodes: filteredNodes.filter((node) => layerForNode(node) === "config"),
-    },
-    {
-      key: "docs",
-      label: "Documentation",
-      nodes: filteredNodes.filter((node) => layerForNode(node) === "docs"),
-    },
-    {
-      key: "tests",
-      label: "Tests",
-      nodes: filteredNodes.filter((node) => layerForNode(node) === "tests"),
-    },
-  ];
-  const selectedNode = graph?.nodes.find((node) => node.id === selectedId) ?? null;
-  const openedNode = graph?.nodes.find((node) => node.id === openedId) ?? null;
-  const trail = graph && selectedNode ? ancestry(graph, selectedNode.id) : [];
-  const focusScale = selectedNode ? scaleOf(selectedNode) : null;
-  const surveyDepth = depth >= MAX_MAP_DEPTH ? Number.POSITIVE_INFINITY : depth;
-  const focusOffset = selectedNode ? surveyOffset(selectedNode, surveyDepth) : 0;
-  const visibleLayerCount = Object.values(layers).filter(Boolean).length;
-  const layerCount = Object.keys(layers).length;
   const sharePairingUrl =
     shareStatus?.enabled && shareStatus.token ? pairingUrlFromStatus(shareStatus) : null;
   const shareQrSvg = useMemo(
     () => (sharePairingUrl ? pairingQrSvg(sharePairingUrl) : null),
     [sharePairingUrl],
   );
-  const flows =
-    graph && selectedNode && graph.stats.importsAvailable
-      ? flowPartners(graph, selectedNode)
-      : null;
-  const contained = graph && selectedNode ? childNodes(graph, selectedNode.id) : [];
 
   return (
-    <div className={`app-shell${view === "story" || view === "territory" || view === "part" ? " atlas-shell" : ""}`} ref={shellRef} style={panelStyle}>
+    <div className="app-shell atlas-shell">
       <a className="skip-link" href="#repository-map">
-        Skip to code map
+        Skip to repository
       </a>
 
       <dialog
@@ -906,7 +551,7 @@ function App() {
         }}
       >
         <form onSubmit={submitGitHub}>
-          <SectionHeading
+          <SourceDialogHeading
             index="SOURCE / GITHUB"
             title="Map a public repository"
             titleId="github-dialog-title"
@@ -962,7 +607,7 @@ function App() {
         }}
       >
         <form onSubmit={submitComputer}>
-          <SectionHeading
+          <SourceDialogHeading
             index="SOURCE / COMPUTER"
             title="Map a computer’s repositories"
             titleId="computer-dialog-title"
@@ -1088,7 +733,7 @@ function App() {
             void toggleSharing();
           }}
         >
-          <SectionHeading
+          <SourceDialogHeading
             index="SOURCE / SHARE"
             title="Share with devices"
             titleId="share-dialog-title"
@@ -1209,9 +854,6 @@ function App() {
           <button aria-current={view === "story" ? "page" : undefined} onClick={() => setView("story")}>How it works</button>
           <button aria-current={view === "territory" ? "page" : undefined} onClick={() => setView("territory")}>Where it lives</button>
           <button aria-current={view === "part" ? "page" : undefined} onClick={() => setView("part")}>Inside a part</button>
-          <details className="atlas-more"><summary>More views</summary><div>
-            <button onClick={() => setView("map")}>3D map</button><button onClick={() => setView("flow")}>Import flow</button>
-          </div></details>
           <button onClick={toggleTheme} aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}>{theme === "light" ? "Dark" : "Light"}</button>
         </nav>
         <details className="source-menu"><summary>Source</summary>
@@ -1224,58 +866,48 @@ function App() {
             onChange={openMapFile}
           />
           <button
-            className="github-button"
             type="button"
             onClick={() => mapFileInputRef.current?.click()}
             disabled={loading}
             aria-label="Open an exported Codebase Atlas map file"
           >
-            <span aria-hidden="true">[ ⇣ ]</span>
             <b>Open map</b>
           </button>
           <button
-            className="github-button"
             type="button"
             onClick={() => void exportMap()}
             disabled={loading || !graph}
             aria-label="Save the current map to a file"
           >
-            <span aria-hidden="true">[ ⇡ ]</span>
             <b>Save map</b>
           </button>
           <button
-            className="github-button"
             type="button"
             onClick={openGitHubDialog}
             disabled={loading}
             aria-label="Load a public GitHub repository URL"
             aria-keyshortcuts="g"
           >
-            <span aria-hidden="true">[ GH ]</span>
             <b>GitHub URL</b>
           </button>
           {isDesktopRuntime ? (
             <button
-              className="github-button"
-              type="button"
+                type="button"
               onClick={openShareDialog}
               disabled={loading}
               aria-label="Share local repositories with devices on this network"
               aria-keyshortcuts="c"
             >
-              <span aria-hidden="true">[ NET ]</span>
               <b>{shareStatus?.enabled ? "Sharing" : "Share"}</b>
             </button>
           ) : (
             <button
-              className="github-button"
-              type="button"
+                type="button"
               onClick={openComputerDialog}
               disabled={loading}
               aria-label="Connect to a computer on this network or Tailscale"
               aria-keyshortcuts="c"
             >
-              <span aria-hidden="true">[ NET ]</span>
               <b>Computer</b>
             </button>
           )}
@@ -1287,681 +919,18 @@ function App() {
               disabled={loading}
               aria-label="Choose a repository directory to scan"
             >
-              <span aria-hidden="true">[ + ]</span>
               <b>{loading ? "Scanning" : "Scan directory"}</b>
             </button>
           ) : null}
         </div></details>
       </header>
 
-      {(view === "story" || view === "territory" || view === "part") && graph ? <AtlasWorkspace view={view} onNavigate={setView} key={graph.root} theme={theme} graph={graph} searchQuery={searchQuery} onSearch={setSearchQuery} searchRef={searchRef} results={filteredNodes} selectedId={selectedId} onOpenFile={id => { setView("territory"); selectNode(id); }} /> : (
-      <div className="workspace" ref={workspaceRef}>
-        <button
-          className={`workspace-curtain ${railOpen || inspectorOpen ? "is-active" : ""}`}
-          type="button"
-          aria-label="Close side panels"
-          onClick={() => {
-            setRailOpen(false);
-            setInspectorOpen(false);
-          }}
-        />
-
-        <nav
-          id="module-rail"
-          className={`module-rail ${railOpen ? "is-open" : ""}`}
-          aria-label="Repository modules"
-        >
-          <SectionHeading
-            index="A.01"
-            title="Modules"
-            action={
-              <button
-                className="panel-close btn-ghost"
-                type="button"
-                onClick={() => setRailOpen(false)}
-              >
-                Close
-              </button>
-            }
-          />
-
-          <label className="search-field">
-            <span className="visually-hidden">Search repository modules</span>
-            <span aria-hidden="true">⌕</span>
-            <input
-              ref={searchRef}
-              type="search"
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.currentTarget.value)}
-              placeholder="Search path or language"
-              aria-keyshortcuts="/"
-            />
-            {searchQuery ? (
-              <button type="button" onClick={() => setSearchQuery("")} aria-label="Clear search">
-                ×
-              </button>
-            ) : (
-              <kbd>/</kbd>
-            )}
-          </label>
-
-          <p className="result-count" aria-live="polite">
-            {filteredNodes.length.toLocaleString()} of {graph?.nodes.length.toLocaleString() ?? 0} modules
-          </p>
-
-          <div className="module-groups">
-            {moduleGroups.map((group) =>
-              group.nodes.length ? (
-                <section className="module-group" key={group.key}>
-                  <h3>
-                    <span>{group.label}</span>
-                    <b>{group.nodes.length}</b>
-                  </h3>
-                  <ul>
-                    {group.nodes.map((node) => (
-                      <li key={node.id}>
-                        <button
-                          type="button"
-                          className={selectedNode?.id === node.id ? "is-selected" : ""}
-                          onClick={() => {
-                            selectNode(node.id);
-                            setRailOpen(false);
-                          }}
-                          title={node.path}
-                          aria-current={selectedNode?.id === node.id ? "true" : undefined}
-                        >
-                          <KindMark kind={node.kind} />
-                          <span className="module-name">{node.name}</span>
-                          <span className="module-meta">
-                            {node.kind === "directory" || node.kind === "repository"
-                              ? node.childCount
-                              : graph?.stats.lineCountAvailable
-                                ? node.lines.toLocaleString()
-                                : formatBytes(node.sizeBytes)}
-                          </span>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              ) : null,
-            )}
-            {graph && filteredNodes.length === 0 ? (
-              <p className="no-results">No module matches “{searchQuery}”.</p>
-            ) : null}
-            {!graph ? (
-              <p className="rail-empty">Load a local directory or GitHub repository to populate the module index.</p>
-            ) : null}
-          </div>
-          {layoutMode !== "narrow" || railOpen ? (
-            <PanelResizeHandle
-              label="Resize modules panel"
-              controlsId="module-rail"
-              edge="end"
-              value={widths.rail}
-              min={MIN_RAIL_WIDTH}
-              max={railMax}
-              defaultValue={DEFAULT_RAIL_WIDTH}
-              onChange={previewRail}
-              onCommit={commitRail}
-            />
-          ) : null}
-        </nav>
-
-        <main id="repository-map" className="map-panel" tabIndex={-1}>
-          <div className="map-header">
-            <div className="location-block">
-              <span className="section-index">
-                {VIEW_INDEX[view]}
-                {focusScale ? ` · ${focusScale}` : ""}
-                {focusOffset ? ` · +${focusOffset}` : ""}
-              </span>
-              <h1 className="visually-hidden">
-                {selectedNode?.path ?? graph?.name ?? "Repository field"}
-              </h1>
-              {trail.length ? (
-                <LocationTrail trail={trail} onSelect={selectNode} compact />
-              ) : (
-                <p className="location-fallback">{graph ? graph.name : "Repository field"}</p>
-              )}
-            </div>
-            <button
-              className="mobile-inspector-button btn-ghost"
-              type="button"
-              onClick={() => setInspectorOpen(true)}
-              disabled={!selectedNode}
-              aria-controls="node-inspector"
-              aria-expanded={inspectorOpen}
-            >
-              Inspect
-            </button>
-          </div>
-
-          {graph ? (
-            <>
-              <div className="scene-toolbar" aria-label="Map controls">
-                <div className="toolbar-cluster">
-                  <Seg plate className="view-controls" role="group" aria-label="Visualization mode">
-                    {VIEW_MODES.map((mode) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        aria-pressed={view === mode}
-                        onClick={() => setView(mode)}
-                      >
-                        {mode}
-                      </button>
-                    ))}
-                  </Seg>
-                  {view === "map" ? (
-                    <Seg
-                      plate
-                      variant="strike"
-                      className="layer-controls"
-                      aria-label="Visible map layers"
-                    >
-                      {(Object.keys(layers) as LayerName[]).map((layer) => (
-                        <button
-                          key={layer}
-                          type="button"
-                          aria-pressed={layers[layer]}
-                          onClick={() => toggleLayer(layer)}
-                        >
-                          <span aria-hidden="true">{layers[layer] ? "■" : "□"}</span>
-                          {layer}
-                        </button>
-                      ))}
-                    </Seg>
-                  ) : null}
-                </div>
-                {view === "story" ? null : (
-                <div className="altitude-controls">
-                  <label
-                    className="depth-controls plate"
-                    title="Default grain of the whole field. Opening a district looks deeper locally without moving this."
-                  >
-                    <span>
-                      Survey {depth >= MAX_MAP_DEPTH ? "all" : depth}
-                    </span>
-                    <input
-                      type="range"
-                      min={1}
-                      max={MAX_MAP_DEPTH}
-                      step={1}
-                      value={depth}
-                      onChange={(event) => setDepth(Number(event.currentTarget.value))}
-                      aria-label="Survey depth: directory levels rendered across the map"
-                    />
-                  </label>
-                  {focusScale ? (
-                    <ScaleLadder current={focusScale} trail={trail} onSelect={selectNode} />
-                  ) : null}
-                  {openedNode ? (
-                    <Seg plate className="close-opened">
-                      <button
-                        type="button"
-                        onClick={closeOpened}
-                        title={`Close ${openedNode.path} and back out (Esc)`}
-                      >
-                        ✕ close {openedNode.name}
-                      </button>
-                    </Seg>
-                  ) : null}
-                </div>
-                )}
-                {view === "map" ? (
-                  <Seg plate className="camera-controls">
-                    <button
-                      type="button"
-                      onClick={() => sceneRef.current?.zoomOut()}
-                      aria-label="Zoom map out"
-                      aria-keyshortcuts="-"
-                    >
-                      −
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => sceneRef.current?.resetCamera()}
-                      aria-label="Reset map camera"
-                      aria-keyshortcuts="0"
-                    >
-                      Reset
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => sceneRef.current?.zoomIn()}
-                      aria-label="Zoom map in"
-                      aria-keyshortcuts="+"
-                    >
-                      +
-                    </button>
-                  </Seg>
-                ) : null}
-              </div>
-              {view === "story" ? (
-                graph.story ? (
-                  <StoryScene
-                    story={graph.story}
-                    selectedId={selectedId}
-                    onSelect={selectNode}
-                  />
-                ) : (
-                  <section className="story-empty">
-                    <span className="section-index">Story / not written</span>
-                    <h2>No story for this repository</h2>
-                    <p>
-                      The map and flow views are read from the code itself. This view is
-                      not: it needs a short, hand-written account of what the parts are
-                      and what travels between them, because no parse can recover that a
-                      message arrives from a chat server or that a model writes the reply.
-                    </p>
-                    <p>
-                      Add <code>.codebase-index/_story.json</code> to the repository —
-                      actors with a plain-English blurb, the flows between them, and the
-                      journeys data takes. The map and flow views work without it.
-                    </p>
-                  </section>
-                )
-              ) : view === "map" ? (
-                <>
-                  <RepositoryScene
-                    key={theme}
-                    ref={sceneRef}
-                    graph={graph}
-                    selectedId={selectedId}
-                    openedId={openedId}
-                    searchQuery={searchQuery}
-                    layers={layers}
-                    maxDepth={depth >= MAX_MAP_DEPTH ? Number.POSITIVE_INFINITY : depth}
-                    onSelect={selectNode}
-                  />
-                  <div className="axis-key" aria-hidden="true">
-                    <span>Y + area / code volume</span>
-                    <span>X-Z / containment</span>
-                    <span>Arcs / major import routes</span>
-                  </div>
-                </>
-              ) : (
-                <FlowScene
-                  key={theme}
-                  graph={graph}
-                  selectedId={selectedId}
-                  searchQuery={searchQuery}
-                  maxDepth={depth >= MAX_MAP_DEPTH ? Number.POSITIVE_INFINITY : depth}
-                  onSelect={selectNode}
-                />
-              )}
-            </>
-          ) : (
-            <section className="empty-state" aria-labelledby="empty-title">
-              <div className="empty-diagram" aria-hidden="true">
-                <span className="empty-box empty-box-root">00</span>
-                <span className="empty-box empty-box-one">01</span>
-                <span className="empty-box empty-box-two">02</span>
-                <span className="empty-line empty-line-one" />
-                <span className="empty-line empty-line-two" />
-              </div>
-              <span className="section-index">Awaiting coordinates</span>
-              <h2 id="empty-title">Map a codebase</h2>
-              <p>
-                {isDesktopRuntime
-                  ? "Select a local directory, share with devices on this network, or enter a public GitHub URL."
-                  : "Connect to your computer over Wi-Fi or Tailscale, open an exported map, or enter a public GitHub URL."}
-              </p>
-              <div className="empty-actions">
-                <button
-                  className="btn-ink"
-                  type="button"
-                  onClick={() => mapFileInputRef.current?.click()}
-                  disabled={loading}
-                >
-                  Map file
-                </button>
-                <button
-                  className="btn-ghost"
-                  type="button"
-                  onClick={openGitHubDialog}
-                  disabled={loading}
-                >
-                  GitHub repository
-                </button>
-                {isDesktopRuntime ? (
-                  <button
-                    className="btn-ghost"
-                    type="button"
-                    onClick={() => void chooseRepository()}
-                    disabled={loading}
-                  >
-                    Local directory
-                  </button>
-                ) : (
-                  <button
-                    className="btn-ghost"
-                    type="button"
-                    onClick={openComputerDialog}
-                    disabled={loading}
-                  >
-                    Computer
-                  </button>
-                )}
-              </div>
-              {!isDesktopRuntime ? (
-                <small>
-                  On the computer, start Share — then scan the QR code here.
-                </small>
-              ) : null}
-            </section>
-          )}
-
-          {loading ? (
-            <div className="loading-plate" role="status" aria-live="polite">
-              <span className="scan-line" aria-hidden="true" />
-              <strong>Surveying repository</strong>
-              <span>Reading structure, languages, and repository metadata…</span>
-            </div>
-          ) : null}
-
-          {error && !githubDialogOpen && !computerDialogOpen && !shareDialogOpen ? (
-            <div className="error-plate" role="alert">
-              <div>
-                <strong>Scan interrupted</strong>
-                <span>{error}</span>
-              </div>
-              <button type="button" onClick={() => setError(null)} aria-label="Dismiss scan error">
-                ×
-              </button>
-            </div>
-          ) : null}
-        </main>
-
-        <aside
-          id="node-inspector"
-          className={`node-inspector ${inspectorOpen ? "is-open" : ""}`}
-          aria-label="Module inspector"
-        >
-          <SectionHeading
-            index="C.03"
-            title="Inspector"
-            action={
-              <button
-                className="panel-close btn-ghost"
-                type="button"
-                onClick={() => setInspectorOpen(false)}
-              >
-                Close
-              </button>
-            }
-          />
-
-          <Seg className="inspector-tabs" role="tablist" aria-label="Inspector views">
-            <button
-              id="overview-tab"
-              type="button"
-              role="tab"
-              aria-selected={inspectorTab === "overview"}
-              aria-controls="overview-panel"
-              onClick={() => setInspectorTab("overview")}
-            >
-              What it is
-            </button>
-            <button
-              id="details-tab"
-              type="button"
-              role="tab"
-              aria-selected={inspectorTab === "details"}
-              aria-controls="details-panel"
-              onClick={() => setInspectorTab("details")}
-            >
-              Details
-            </button>
-          </Seg>
-
-          {selectedNode ? (
-            <div className="inspector-content">
-              <div className="node-identity">
-                <span className={`node-glyph kind-${selectedNode.kind}`} aria-hidden="true">
-                  {nodeGlyph(selectedNode)}
-                </span>
-                <div>
-                  <span>
-                    {focusScale} · {selectedNode.kind}
-                  </span>
-                  <h3>{selectedNode.name}</h3>
-                </div>
-              </div>
-              <LocationTrail trail={trail} onSelect={selectNode} />
-
-              {inspectorTab === "overview" ? (
-                <div
-                  id="overview-panel"
-                  role="tabpanel"
-                  aria-labelledby="overview-tab"
-                  className="inspector-panel"
-                >
-                  <p className="node-description">
-                    {selectedNode.description ?? kindDescriptions[selectedNode.kind]}
-                  </p>
-                  <section>
-                    <h4>Placement</h4>
-                    <dl className="detail-list">
-                      <div>
-                        <dt>Scale</dt>
-                        <dd>
-                          {focusScale}
-                          {focusOffset ? ` · +${focusOffset} below survey` : " · at survey"}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>Layer</dt>
-                        <dd>{layerForNode(selectedNode)}</dd>
-                      </div>
-                    </dl>
-                  </section>
-                  <section>
-                    <h4>Signal</h4>
-                    <div className="signal-grid">
-                      <Stat
-                        label="Lines"
-                        value={
-                          graph?.stats.lineCountAvailable
-                            ? selectedNode.lines.toLocaleString()
-                            : "--"
-                        }
-                      />
-                      <Stat label="Size" value={formatBytes(selectedNode.sizeBytes)} />
-                      <Stat label="Children" value={selectedNode.childCount.toLocaleString()} />
-                    </div>
-                  </section>
-                  {contained.length ? (
-                    <section>
-                      <h4>
-                        Contains / {contained.length}
-                      </h4>
-                      <Register
-                        onSelect={selectNode}
-                        items={contained.map((child) => ({
-                          id: child.id,
-                          label: child.name,
-                          kind: child.kind,
-                          title: child.path,
-                          value:
-                            child.kind === "directory" || child.kind === "repository"
-                              ? child.childCount.toLocaleString()
-                              : graph?.stats.lineCountAvailable
-                                ? child.lines.toLocaleString()
-                                : formatBytes(child.sizeBytes),
-                        }))}
-                      />
-                    </section>
-                  ) : null}
-                  {selectedNode.symbols?.length ? (
-                    <section>
-                      <h4>Declares / {selectedNode.symbols.length}</h4>
-                      <Register
-                        items={selectedNode.symbols.map((symbol) => ({
-                          id: `${selectedNode.id}#${symbol.name}`,
-                          label: symbol.name,
-                          kind: symbol.kind,
-                          title: `${symbol.exported ? "Exported" : "Internal"} ${symbol.kind} at line ${symbol.line}`,
-                          value: symbol.line,
-                        }))}
-                      />
-                    </section>
-                  ) : null}
-                  {flows
-                    ? [
-                        {
-                          label: "Imports",
-                          entries: topFlows(flows.imports),
-                          total: flows.imports.size,
-                        },
-                        {
-                          label: "Imported by",
-                          entries: topFlows(flows.importers),
-                          total: flows.importers.size,
-                        },
-                      ].map((group) =>
-                        group.entries.length ? (
-                          <section key={group.label}>
-                            <h4>
-                              {group.label} / {group.total}
-                            </h4>
-                            <Register
-                              onSelect={selectNode}
-                              items={group.entries.map(([id, flow]) => ({
-                                id,
-                                label: id.split("/").pop() ?? id,
-                                title: id,
-                                value: flow.count,
-                                detail: crossingLabel(flow.symbols),
-                              }))}
-                            />
-                          </section>
-                        ) : null,
-                      )
-                    : null}
-                  {graph && !graph.stats.importsAvailable ? (
-                    <section>
-                      <h4>Flow</h4>
-                      <p className="node-description">
-                        Import edges are unavailable for GitHub sources. Scan a local directory to
-                        map flow.
-                      </p>
-                    </section>
-                  ) : null}
-                  {selectedNode.kind === "repository" && graph?.stats.languages.length ? (
-                    <section>
-                      <h4>Language register</h4>
-                      <Register
-                        items={graph.stats.languages.slice(0, 8).map((language) => ({
-                          id: language.name,
-                          label: language.name,
-                          value: graph.stats.lineCountAvailable
-                            ? language.lines.toLocaleString()
-                            : `${language.files.toLocaleString()} files`,
-                        }))}
-                      />
-                    </section>
-                  ) : null}
-                </div>
-              ) : (
-                <div
-                  id="details-panel"
-                  role="tabpanel"
-                  aria-labelledby="details-tab"
-                  className="inspector-panel"
-                >
-                  <dl className="detail-list full-details">
-                    <div>
-                      <dt>Path</dt>
-                      <dd>{selectedNode.path}</dd>
-                    </div>
-                    <div>
-                      <dt>Language</dt>
-                      <dd>{selectedNode.language ?? "Not classified"}</dd>
-                    </div>
-                    <div>
-                      <dt>Extension</dt>
-                      <dd>{selectedNode.extension ?? "--"}</dd>
-                    </div>
-                    <div>
-                      <dt>Lines</dt>
-                      <dd>
-                        {graph?.stats.lineCountAvailable
-                          ? selectedNode.lines.toLocaleString()
-                          : "Unavailable"}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Bytes</dt>
-                      <dd>{selectedNode.sizeBytes.toLocaleString()}</dd>
-                    </div>
-                    <div>
-                      <dt>Children</dt>
-                      <dd>{selectedNode.childCount.toLocaleString()}</dd>
-                    </div>
-                    <div>
-                      <dt>Node ID</dt>
-                      <dd>{selectedNode.id}</dd>
-                    </div>
-                  </dl>
-                </div>
-              )}
-            </div>
-          ) : (
-            <p className="inspector-empty">Select a module in the map or index to inspect its coordinates.</p>
-          )}
-
-          {graph?.warnings.length ? (
-            <section className="warning-register" aria-label="Scanner warnings">
-              <h4>Field notes / {graph.warnings.length}</h4>
-              {graph.warnings.map((warning, index) => (
-                <p key={`${index}-${warning}`}>{warning}</p>
-              ))}
-            </section>
-          ) : null}
-          {layoutMode === "wide" || inspectorOpen ? (
-            <PanelResizeHandle
-              label="Resize inspector panel"
-              controlsId="node-inspector"
-              edge="start"
-              value={widths.inspector}
-              min={MIN_INSPECTOR_WIDTH}
-              max={inspectorMax}
-              defaultValue={DEFAULT_INSPECTOR_WIDTH}
-              onChange={previewInspector}
-              onCommit={commitInspector}
-            />
-          ) : null}
-        </aside>
-      </div>
-      )}
-
-      <footer className="status-strip">
-        <div>
-          <span className={`status-dot ${loading ? "is-loading" : graph ? "is-ready" : ""}`} />
-          {loading ? "Scanning" : graph ? "Map ready" : "Awaiting source"}
-        </div>
-        <p>
-          {view === "story" ? (
-            <>
-              Pick a journey to follow the data · hover a part to see what it touches · click a part to keep it lit, or a file on it to open that file
-            </>
-          ) : view === "map" ? (
-            <>
-              Drag to orbit · click a district to go there · click an arc to see what crosses it · <kbd>esc</kbd> backs out · <kbd>/</kbd> search · <kbd>0</kbd> reset
-            </>
-          ) : (
-            <>
-              Click a module to trace its flow · click a route to see what crosses it · <kbd>G</kbd> GitHub · <kbd>/</kbd> search
-            </>
-          )}
-        </p>
-        <div className="status-path" title={graph?.root}>
-          {graph
-            ? `${graph.source.toUpperCase()} · ${visibleLayerCount}/${layerCount} layers · ${graph.root}`
-            : "LOCAL OR GITHUB / READ ONLY"}
-        </div>
+      {loading && <p className="atlas-feedback" role="status">Reading the repository…</p>}
+      {error && !githubDialogOpen && !computerDialogOpen && !shareDialogOpen && <p className="atlas-feedback" role="alert">{error}</p>}
+      {graph ? <AtlasWorkspace view={view} onNavigate={setView} key={graph.root} theme={theme} graph={graph} searchQuery={searchQuery} onSearch={setSearchQuery} searchRef={searchRef} results={filteredNodes} selectedId={selectedId} onOpenFile={selectNode} /> : <main id="repository-map" className="atlas-welcome"><h1>Read a <em>codebase</em>.</h1><p>Choose a source to explore its files and written story.</p><button className="btn-ink" onClick={openGitHubDialog}>Open a GitHub repository</button><button className="btn-ghost" onClick={() => mapFileInputRef.current?.click()}>Open a saved map</button></main>}
+      <footer className="atlas-status">
+        <span>{loading ? "Reading repository" : graph ? `${graph.stats.files.toLocaleString()} files · ${graph.stats.lineCountAvailable ? `${graph.stats.lines.toLocaleString()} lines` : "line counts unavailable"}` : "Awaiting source"}</span>
+        <span>{graph ? `${graph.source} · ${graph.stats.truncated ? "partial scan" : "read only"}` : "Read only"} · <kbd>/</kbd> search · <kbd>G</kbd> GitHub · <kbd>C</kbd> computer</span>
       </footer>
     </div>
   );

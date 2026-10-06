@@ -1,7 +1,7 @@
 import type { RepositoryGraph, RepositoryNode, StoryJourney } from "./model.ts";
 import { excludedSourcePath, isProductSource } from "./sourceScope.ts";
 import { isFile, ownerForNode } from "./storyFacts.ts";
-import { fileWeight, packTreemap, type TreemapCell } from "./repositoryLayout.ts";
+import { fileWeight, packTreemap, type TreemapCell } from "./treemap.ts";
 
 export interface PartCoverage { actorId: string | null; lines: number; files: number; percent: number | null }
 export function storyCoverage(graph: RepositoryGraph) {

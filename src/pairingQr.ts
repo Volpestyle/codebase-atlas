@@ -4,7 +4,7 @@ export function pairingQrSvg(value: string): string {
   return renderSVG(value, {
     border: 2,
     pixelSize: 8,
-    blackColor: "#14150f",
-    whiteColor: "#e2dbaa",
+    blackColor: "#0a0a0a",
+    whiteColor: "#ffffff",
   });
 }

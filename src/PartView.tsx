@@ -28,7 +28,7 @@ export default function PartView({ graph, actor, theme, onSelectActor, onOpenFil
         <section className="atlas-file-detail"><h2>In the <em>code</em> <small className="atlas-kicker">Scanned imports</small></h2><Crossings graph={graph} actor={actor} onSelectActor={onSelectActor} onOpenFile={onOpenFile} /></section>
       </div>
       <aside className="inside-facts">
-        <div className="atlas-card"><PartFigure actor={actor} theme={theme} /><div className="atlas-padding">{actor.name}<span className="atlas-muted"> · {files.length} files</span></div></div>
+        <div className="atlas-card"><PartFigure actor={actor} theme={theme} /><div className="atlas-padding">{actor.name}<span className="atlas-muted"> · {files.length} file{files.length === 1 ? "" : "s"}</span></div></div>
         <section><h2>Its files <small className="atlas-kicker">Scanned</small></h2><FileList graph={graph} files={files} onOpenFile={onOpenFile} /></section>
         <section><h2>Checked by <small className="atlas-kicker">Scanned imports</small></h2>{!graph.stats.importsAvailable ? <p className="atlas-muted">Tests need a local import scan.</p> : tests.length ? <FileList graph={graph} files={tests} onOpenFile={onOpenFile} /> : <p className="atlas-muted">No test files import this part in the scan. Inline tests are not separate import edges.</p>}</section>
       </aside>
