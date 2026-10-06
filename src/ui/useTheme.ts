@@ -10,9 +10,23 @@ function savedTheme(): Theme | null {
   } catch { return null; }
 }
 
+function prefersDark() {
+  try { return window.matchMedia("(prefers-color-scheme: dark)").matches; } catch { return false; }
+}
+
+function applyTheme(theme: Theme) {
+  document.documentElement.dataset.theme = theme;
+  document.documentElement.style.colorScheme = theme;
+}
+
+/** Runs before the first render so a saved choice paints without a light/dark flash. */
+export function applyInitialTheme() {
+  applyTheme(savedTheme() ?? (prefersDark() ? "dark" : "light"));
+}
+
 export function useTheme() {
   const [preference, setPreference] = useState<Theme | null>(savedTheme);
-  const [systemDark, setSystemDark] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
+  const [systemDark, setSystemDark] = useState(prefersDark);
   const theme = preference ?? (systemDark ? "dark" : "light");
   useEffect(() => {
     const query = window.matchMedia("(prefers-color-scheme: dark)");
@@ -20,10 +34,7 @@ export function useTheme() {
     query.addEventListener("change", update);
     return () => query.removeEventListener("change", update);
   }, []);
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    document.documentElement.style.colorScheme = theme;
-  }, [theme]);
+  useEffect(() => applyTheme(theme), [theme]);
   function toggleTheme() {
     const next = theme === "dark" ? "light" : "dark";
     setPreference(next);

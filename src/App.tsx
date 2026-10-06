@@ -107,6 +107,8 @@ function App() {
   const { theme, toggleTheme } = useTheme();
 
   const [graph, setGraph] = useState<RepositoryGraph | null>(null);
+  // Bumped per loaded graph so a reload of the same root resets workspace state.
+  const [graphLoad, setGraphLoad] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -129,9 +131,11 @@ function App() {
   const mapFileInputRef = useRef<HTMLInputElement>(null);
   const githubInputRef = useRef<HTMLInputElement>(null);
   const companionHostRef = useRef<HTMLInputElement>(null);
+  const sourceMenuRef = useRef<HTMLDetailsElement>(null);
 
   function showGraph(nextGraph: RepositoryGraph) {
     setGraph(nextGraph);
+    setGraphLoad((count) => count + 1);
     setSelectedId(null);
     setSearchQuery("");
   }
@@ -405,8 +409,14 @@ function App() {
         setComputerDialogOpen(false);
         setShareDialogOpen(false);
         setScannerOpen(false);
+        const sourceMenu = sourceMenuRef.current;
+        if (sourceMenu?.open) {
+          sourceMenu.open = false;
+          sourceMenu.querySelector("summary")?.focus();
+        }
         return;
       }
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
 
       const target = event.target;
       if (
@@ -535,7 +545,7 @@ function App() {
 
   return (
     <div className="app-shell atlas-shell">
-      <a className="skip-link" href="#repository-map">
+      <a className="skip-link" href="#atlas-main">
         Skip to repository
       </a>
 
@@ -854,9 +864,9 @@ function App() {
           <button aria-current={view === "story" ? "page" : undefined} onClick={() => setView("story")}>How it works</button>
           <button aria-current={view === "territory" ? "page" : undefined} onClick={() => setView("territory")}>Where it lives</button>
           <button aria-current={view === "part" ? "page" : undefined} onClick={() => setView("part")}>Inside a part</button>
-          <button onClick={toggleTheme} aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}>{theme === "light" ? "Dark" : "Light"}</button>
+          <button className="theme-toggle" onClick={toggleTheme} aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}>{theme === "light" ? "Dark" : "Light"}</button>
         </nav>
-        <details className="source-menu"><summary>Source</summary>
+        <details ref={sourceMenuRef} className="source-menu"><summary>Source</summary>
         <div className="source-actions">
           <input
             ref={mapFileInputRef}
@@ -927,7 +937,7 @@ function App() {
 
       {loading && <p className="atlas-feedback" role="status">Reading the repository…</p>}
       {error && !githubDialogOpen && !computerDialogOpen && !shareDialogOpen && <p className="atlas-feedback" role="alert">{error}</p>}
-      {graph ? <AtlasWorkspace view={view} onNavigate={setView} key={graph.root} theme={theme} graph={graph} searchQuery={searchQuery} onSearch={setSearchQuery} searchRef={searchRef} results={filteredNodes} selectedId={selectedId} onOpenFile={selectNode} /> : <main id="repository-map" className="atlas-welcome"><h1>Read a <em>codebase</em>.</h1><p>Choose a source to explore its files and written story.</p><button className="btn-ink" onClick={openGitHubDialog}>Open a GitHub repository</button><button className="btn-ghost" onClick={() => mapFileInputRef.current?.click()}>Open a saved map</button></main>}
+      {graph ? <AtlasWorkspace view={view} onNavigate={setView} key={graphLoad} theme={theme} graph={graph} searchQuery={searchQuery} onSearch={setSearchQuery} searchRef={searchRef} results={filteredNodes} selectedId={selectedId} onOpenFile={selectNode} /> : <main id="atlas-main" className="atlas-welcome"><h1>Read a <em>codebase</em>.</h1><p>Choose a source to explore its files and written story.</p><button className="btn-ink" onClick={openGitHubDialog}>Open a GitHub repository</button><button className="btn-ghost" onClick={() => mapFileInputRef.current?.click()}>Open a saved map</button></main>}
       <footer className="atlas-status">
         <span>{loading ? "Reading repository" : graph ? `${graph.stats.files.toLocaleString()} files · ${graph.stats.lineCountAvailable ? `${graph.stats.lines.toLocaleString()} lines` : "line counts unavailable"}` : "Awaiting source"}</span>
         <span>{graph ? `${graph.source} · ${graph.stats.truncated ? "partial scan" : "read only"}` : "Read only"} · <kbd>/</kbd> search · <kbd>G</kbd> GitHub · <kbd>C</kbd> computer</span>
